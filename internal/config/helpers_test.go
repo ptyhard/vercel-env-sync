@@ -62,18 +62,26 @@ func TestFileExists_PermError(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root では権限エラーを再現できない")
 	}
-	dir := t.TempDir()
-	f, err := os.CreateTemp(dir, "perm-*.txt")
+	// サブディレクトリの実行権限を落とすことで os.Stat が EACCES になる状況を作る。
+	// （ファイル自体の chmod では os.Stat は失敗しない）
+	parent := t.TempDir()
+	sub, err := os.MkdirTemp(parent, "noperm-*")
+	if err != nil {
+		t.Skip("サブディレクトリ作成失敗")
+	}
+	f, err := os.CreateTemp(sub, "file-*.txt")
 	if err != nil {
 		t.Skip("一時ファイル作成失敗")
 	}
 	f.Close()
-	// ファイルのパーミッションを 000 にして読み取り不能にする
-	if err := os.Chmod(f.Name(), 0o000); err != nil {
+	path := f.Name()
+	// ディレクトリの実行権限を落として中のファイルに stat できなくする
+	if err := os.Chmod(sub, 0o000); err != nil {
 		t.Skip("chmod 失敗")
 	}
-	// ファイルは存在するが stat でアクセスできない → FileExists は true を返すべき
-	if !FileExists(f.Name()) {
-		t.Error("FileExists(権限なしファイル) = false, want true（ファイルは存在する）")
+	t.Cleanup(func() { os.Chmod(sub, 0o700) }) // TempDir の掃除が通るよう権限を戻す
+	// ファイルは存在するが stat できない → FileExists は true を返すべき
+	if !FileExists(path) {
+		t.Error("FileExists(EACCES) = false, want true（ファイルは存在する）")
 	}
 }

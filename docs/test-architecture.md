@@ -54,7 +54,7 @@ func withGitHubAPIBase(t *testing.T, base string) {
 
 ## ファイル配置
 
-- 実装と**同階層・同パッケージ**に `<対象>_test.go` を置く。各テストは対応する実装パッケージに同居する：
+- 実装と**同階層（同ディレクトリ）**に `<対象>_test.go` を置く。必要に応じて `*_test` 形式の別パッケージ（外部テストパッケージ）を使う。各テストは対応する実装と同ディレクトリに配置する：
   - `internal/config/` … `config_test.go` / `dotenv_test.go` / `helpers_test.go` / `init_test.go`
   - `internal/sync/` … `entry_test.go`
   - `internal/provider/` … `provider_test.go`
