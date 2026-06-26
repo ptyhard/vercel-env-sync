@@ -59,7 +59,11 @@ func (v *vercelProvider) Sync(opts options, entries []Entry) error {
 	fmt.Printf("登録対象 %d 件 (既存は upsert で上書き):\n", len(items))
 	for _, it := range items {
 		tj, _ := json.Marshal(it.Target)
-		fmt.Printf("  %s (%s) -> %s\n", it.Key, it.Type, string(tj))
+		secretLabel := "secret=true"
+		if it.Type == "plain" {
+			secretLabel = "secret=false"
+		}
+		fmt.Printf("  %s (%s) environments=%s\n", it.Key, secretLabel, string(tj))
 	}
 	fmt.Println()
 

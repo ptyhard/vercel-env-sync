@@ -18,7 +18,11 @@ var providerOrder []string
 
 // registerProvider はプロバイダ名とファクトリ関数を registry に登録する。
 // 各プロバイダの init() から呼び出す。
+// 同名プロバイダを二重登録した場合は panic する。
 func registerProvider(name string, factory func() Provider) {
+	if _, exists := providerRegistry[name]; exists {
+		panic("registerProvider: プロバイダ " + name + " は既に登録されています")
+	}
 	providerRegistry[name] = factory
 	providerOrder = append(providerOrder, name)
 }

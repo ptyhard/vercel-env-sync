@@ -24,21 +24,17 @@ func TestRegistry_UnknownProvider(t *testing.T) {
 	}
 }
 
-// TestRegisteredProviderNames_Order は registeredProviderNames が sort なし登録順を返すことを確認する（W1 回帰防止）。
-// Go の init() 実行順はファイル名の lexical 順なので github.go (g) → vercel.go (v) の順になる。
-func TestRegisteredProviderNames_Order(t *testing.T) {
+// TestRegisteredProviderNames_Contains は registeredProviderNames が vercel / github を含むことを確認する。
+// init() 実行順は Go 仕様で保証されないため、順序ではなく存在のみを検証する。
+func TestRegisteredProviderNames_Contains(t *testing.T) {
 	names := registeredProviderNames()
-	// vercel と github が両方含まれていること
 	foundVercel, foundGitHub := false, false
-	vercelIdx, githubIdx := -1, -1
-	for i, n := range names {
+	for _, n := range names {
 		switch n {
 		case "vercel":
 			foundVercel = true
-			vercelIdx = i
 		case "github":
 			foundGitHub = true
-			githubIdx = i
 		}
 	}
 	if !foundVercel {
@@ -46,12 +42,6 @@ func TestRegisteredProviderNames_Order(t *testing.T) {
 	}
 	if !foundGitHub {
 		t.Error("github が registeredProviderNames に含まれない")
-	}
-	// sort が行われていないこと: registeredProviderNames の結果が sort.Strings と異なる（もしくは
-	// sort 後と同じになる場合でも panic しない）ことを確認。
-	// 実際の登録順（github→vercel）が維持されていれば、github のインデックスが vercel より小さい。
-	if vercelIdx >= 0 && githubIdx >= 0 && githubIdx > vercelIdx {
-		t.Errorf("github (%d) が vercel (%d) より後に返された（登録順は github→vercel のはず）", githubIdx, vercelIdx)
 	}
 }
 

@@ -10,9 +10,10 @@ type Entry struct {
 }
 
 // resolveEntries は def と envVars から Entry のスライスを生成する。
-// - def にあるが envVars に無いキーはスキップする
-// - secret: varConf.Secret が非 nil → その値、nil → defaults.Secret が非 nil → その値、nil → true
-// - environments: varConf.Environments が非空 → その値、空 → defaults.Environments が非空 → その値、空 → 空のまま
+//   - def にあるが envVars に無いキーはスキップする
+//   - secret: varConf.Secret が非 nil → その値、nil → defaults.Secret が非 nil → その値、nil → true
+//   - environments: varConf.Environments が非空 → その値、空 → defaults.Environments が非空 → その値、空 → 空のまま
+//     空文字列エントリは除去し、重複は除去してから Entry に反映する。
 func resolveEntries(def definition, envVars map[string]string, defKeys []string) ([]Entry, error) {
 	var entries []Entry
 	for _, key := range defKeys {
@@ -40,6 +41,9 @@ func resolveEntries(def definition, envVars map[string]string, defKeys []string)
 			envs = conf.Environments
 		}
 
+		// 空文字列を除去し重複を排除する
+		envs = deduplicateEnvironments(envs)
+
 		entries = append(entries, Entry{
 			Key:          key,
 			Value:        val,
@@ -48,4 +52,25 @@ func resolveEntries(def definition, envVars map[string]string, defKeys []string)
 		})
 	}
 	return entries, nil
+}
+
+// deduplicateEnvironments は environments スライスから空文字を除去し重複を排除する。
+// 入力が空なら nil を返す（provider 側フォールバックが空スライスかどうかを len で判定するため）。
+func deduplicateEnvironments(envs []string) []string {
+	if len(envs) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(envs))
+	result := make([]string, 0, len(envs))
+	for _, e := range envs {
+		if e == "" || seen[e] {
+			continue
+		}
+		seen[e] = true
+		result = append(result, e)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }

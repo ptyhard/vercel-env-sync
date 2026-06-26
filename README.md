@@ -141,7 +141,7 @@ VERCEL_TOKEN=xxxxx ./env-sync --env .env.production
 VERCEL_TOKEN=xxxxx ./env-sync --env .env.production --yes
 ```
 
-送信前に登録対象（key / secret / target）を一覧表示し、既存変数は upsert で上書きされるため `y/N` の確認を取る。`--yes`（`-y`）で確認をスキップできる。非対話環境で `--yes` を付けないと安全のため中止する。
+送信前に登録対象（key / secret / environments）を一覧表示し、既存変数は upsert で上書きされるため `y/N` の確認を取る。`--yes`（`-y`）で確認をスキップできる。非対話環境で `--yes` を付けないと安全のため中止する。
 
 ## オプション / 環境変数
 
