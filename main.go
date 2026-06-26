@@ -514,17 +514,23 @@ func parseGitHubRemoteURL(rawURL string) (owner, repo string, ok bool) {
 
 	var path string
 
-	if strings.HasPrefix(rawURL, "git@github.com:") {
-		// SSH 形式
+	switch {
+	case strings.HasPrefix(rawURL, "git@github.com:"):
+		// SCP 風 SSH 形式: git@github.com:owner/repo.git
 		path = strings.TrimPrefix(rawURL, "git@github.com:")
-	} else if strings.HasPrefix(rawURL, "https://github.com/") {
-		// HTTPS 形式
+	case strings.HasPrefix(rawURL, "ssh://git@github.com/"):
+		// ssh:// 形式: ssh://git@github.com/owner/repo.git
+		path = strings.TrimPrefix(rawURL, "ssh://git@github.com/")
+	case strings.HasPrefix(rawURL, "https://github.com/"):
+		// HTTPS 形式: https://github.com/owner/repo.git
 		path = strings.TrimPrefix(rawURL, "https://github.com/")
-	} else {
+	default:
 		return "", "", false
 	}
 
-	// 末尾 .git 除去
+	// 末尾の改行・スラッシュ・.git を除去
+	path = strings.TrimSpace(path)
+	path = strings.TrimSuffix(path, "/")
 	path = strings.TrimSuffix(path, ".git")
 
 	parts := strings.SplitN(path, "/", 2)

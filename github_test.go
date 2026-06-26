@@ -69,6 +69,27 @@ func TestParseGitHubURL_SSH(t *testing.T) {
 			wantRepo:  "my-repo",
 			wantOK:    true,
 		},
+		{
+			name:      "ssh:// 形式 .git あり",
+			rawURL:    "ssh://git@github.com/owner/repo.git",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+			wantOK:    true,
+		},
+		{
+			name:      "HTTPS 形式 末尾スラッシュ",
+			rawURL:    "https://github.com/owner/repo/",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+			wantOK:    true,
+		},
+		{
+			name:      "末尾改行を含む",
+			rawURL:    "git@github.com:owner/repo.git\n",
+			wantOwner: "owner",
+			wantRepo:  "repo",
+			wantOK:    true,
+		},
 	}
 
 	for _, tc := range tests {
