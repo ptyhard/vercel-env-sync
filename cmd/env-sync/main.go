@@ -42,6 +42,7 @@ import (
 	"github.com/ptyhard/env-sync/internal/provider"
 	internalsync "github.com/ptyhard/env-sync/internal/sync"
 
+	_ "github.com/ptyhard/env-sync/internal/provider/gcp"
 	_ "github.com/ptyhard/env-sync/internal/provider/github"
 	_ "github.com/ptyhard/env-sync/internal/provider/vercel"
 )
