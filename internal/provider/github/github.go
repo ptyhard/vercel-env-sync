@@ -41,6 +41,12 @@ type githubTask struct {
 	entry    provider.Entry
 }
 
+// githubClassifiedTask は githubTask に新規/更新の分類情報を付加した型。
+type githubClassifiedTask struct {
+	task  githubTask
+	isNew bool // true=新規, false=更新
+}
+
 // expandGitHubTasks は Entry スライスを githubTask スライスに展開する純粋関数。
 // Entry.Environments が空 → envScope="" (repoレベル) の task 1件
 // Entry.Environments が非空 → 各 envScope の task
@@ -56,6 +62,47 @@ func expandGitHubTasks(entries []provider.Entry) []githubTask {
 		}
 	}
 	return tasks
+}
+
+// classifyGitHubTasksByExistence は exists 関数を使って各タスクを新規/更新に分類する純粋関数。
+// exists(task) → (存在するか, エラー)
+func classifyGitHubTasksByExistence(tasks []githubTask, exists func(t githubTask) (bool, error)) ([]githubClassifiedTask, error) {
+	result := make([]githubClassifiedTask, len(tasks))
+	for i, t := range tasks {
+		found, err := exists(t)
+		if err != nil {
+			return nil, fmt.Errorf("%s: 存在確認失敗: %w", t.entry.Key, err)
+		}
+		result[i] = githubClassifiedTask{task: t, isNew: !found}
+	}
+	return result, nil
+}
+
+// classifyGitHubTasks は GitHub API を呼んで各タスクを新規/更新に分類する。
+func classifyGitHubTasks(client *http.Client, token, owner, repo string, tasks []githubTask) ([]githubClassifiedTask, error) {
+	exists := func(t githubTask) (bool, error) {
+		if t.entry.Secret {
+			return githubSecretExists(client, token, owner, repo, t.envScope, t.entry.Key)
+		}
+		return githubVariableExists(client, token, owner, repo, t.envScope, t.entry.Key)
+	}
+	return classifyGitHubTasksByExistence(tasks, exists)
+}
+
+// countGitHubClassified は classified から新規件数・更新件数を返す。
+// classified が nil のときは新規=total、更新=0 を返す。
+func countGitHubClassified(classified []githubClassifiedTask, total int) (newCount, updateCount int) {
+	if classified == nil {
+		return total, 0
+	}
+	for _, c := range classified {
+		if c.isNew {
+			newCount++
+		} else {
+			updateCount++
+		}
+	}
+	return
 }
 
 // Sync は GitHub Actions への環境変数/シークレット同期を行う。
@@ -74,10 +121,26 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	// ---- 登録対象を展開 ----
 	tasks := expandGitHubTasks(entries)
 
+	// ---- 既存確認して新規/更新を分類 ----
+	client := &http.Client{}
+	var classified []githubClassifiedTask
+	if token != "" {
+		cls, err := classifyGitHubTasks(client, token, owner, repo, tasks)
+		if err == nil {
+			classified = cls
+		}
+		// API 失敗時は classified = nil のまま（安全側フォールバック）
+	}
+
 	// ---- 一覧表示 ----
 	fmt.Printf("対象リポジトリ: %s/%s\n", owner, repo)
-	fmt.Printf("登録対象 %d 件:\n", len(tasks))
-	for _, t := range tasks {
+	newCount, updateCount := countGitHubClassified(classified, len(tasks))
+	if classified != nil {
+		fmt.Printf("登録対象 %d 件 (新規 %d 件 / 更新 %d 件):\n", len(tasks), newCount, updateCount)
+	} else {
+		fmt.Printf("登録対象 %d 件:\n", len(tasks))
+	}
+	for i, t := range tasks {
 		kind := "Secret"
 		if !t.entry.Secret {
 			kind = "Variable"
@@ -86,7 +149,15 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		if scope == "" {
 			scope = "repo"
 		}
-		fmt.Printf("  %s (env: %s, %s)\n", t.entry.Key, scope, kind)
+		if classified != nil {
+			marker, label := "⟳", "更新"
+			if classified[i].isNew {
+				marker, label = "+", "新規"
+			}
+			fmt.Printf("  %s %s (env: %s, %s) [%s]\n", marker, t.entry.Key, scope, kind, label)
+		} else {
+			fmt.Printf("  %s (env: %s, %s)\n", t.entry.Key, scope, kind)
+		}
 	}
 	fmt.Println()
 
@@ -99,12 +170,17 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		return nil
 	}
 
-	// ---- 確認 ----
-	if !opts.Yes {
+	// ---- 確認（更新がある場合、または分類不可の場合） ----
+	needsConfirm := classified == nil || updateCount > 0
+	if needsConfirm && !opts.Yes {
 		if !config.IsTTY(os.Stdin) {
 			return fmt.Errorf("対話できない環境です。確認をスキップするには --yes を付けてください")
 		}
-		fmt.Print("上記を GitHub に登録します。続行しますか? (y/N) ")
+		if classified != nil && updateCount > 0 {
+			fmt.Printf("上記に更新(上書き) %d 件が含まれます。GitHub に登録します。続行しますか? (y/N) ", updateCount)
+		} else {
+			fmt.Print("上記を GitHub に登録します。続行しますか? (y/N) ")
+		}
 		reader := bufio.NewReader(os.Stdin)
 		line, _ := reader.ReadString('\n')
 		ans := strings.ToLower(strings.TrimSpace(line))
@@ -115,7 +191,6 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	}
 
 	// ---- 送信 ----
-	client := &http.Client{}
 	okCount, ngCount := 0, 0
 
 	// 公開鍵キャッシュ（envScope ごと）
@@ -358,6 +433,45 @@ func githubPutSecret(client *http.Client, token, owner, repo, envScope, name, en
 		msg += ": " + detail
 	}
 	return fmt.Errorf("%s", msg)
+}
+
+// githubSecretExists は GitHub Actions のシークレットが存在するかを確認する。
+func githubSecretExists(client *http.Client, token, owner, repo, envScope, name string) (bool, error) {
+	var apiURL string
+	if envScope == "" {
+		apiURL = fmt.Sprintf("%s/repos/%s/%s/actions/secrets/%s",
+			githubAPIBase, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(name))
+	} else {
+		apiURL = fmt.Sprintf("%s/repos/%s/%s/environments/%s/secrets/%s",
+			githubAPIBase, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(envScope), url.PathEscape(name))
+	}
+
+	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+	if err != nil {
+		return false, fmt.Errorf("リクエスト生成失敗: %w", err)
+	}
+	setGitHubHeaders(req, token)
+
+	res, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("リクエスト失敗: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode == http.StatusOK {
+		io.Copy(io.Discard, res.Body) //nolint:errcheck // drain で接続を再利用可能にする
+		return true, nil
+	}
+	if res.StatusCode == http.StatusNotFound {
+		io.Copy(io.Discard, res.Body) //nolint:errcheck // drain で接続を再利用可能にする
+		return false, nil
+	}
+
+	msg := fmt.Sprintf("HTTP %d", res.StatusCode)
+	if detail := parseGitHubErrorBody(res.Body); detail != "" {
+		msg += ": " + detail
+	}
+	return false, fmt.Errorf("シークレットの存在確認失敗: %s", msg)
 }
 
 // githubVariableExists は GitHub Actions の変数が存在するかを確認する。
