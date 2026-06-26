@@ -31,9 +31,13 @@ func (v *vercelProvider) Name() string { return "vercel" }
 // Sync は Vercel への環境変数同期を行う。
 func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) error {
 	// ---- 認証情報 / プロジェクト ----
-	token := os.Getenv("VERCEL_TOKEN")
-	projectID := os.Getenv("VERCEL_PROJECT_ID")
-	teamID := os.Getenv("VERCEL_TEAM_ID")
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return err
+	}
+	token := appCfg.ResolveVercelToken()
+	projectID := appCfg.ResolveVercelProjectID()
+	teamID := appCfg.ResolveVercelTeamID()
 	if projectID == "" {
 		pjText, err := os.ReadFile(".vercel/project.json")
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -51,7 +55,7 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		}
 	}
 	if !opts.DryRun && token == "" {
-		return fmt.Errorf("VERCEL_TOKEN が未設定です")
+		return fmt.Errorf("VERCEL_TOKEN が未設定です（環境変数 VERCEL_TOKEN または config ファイルの vercel.token で指定してください）")
 	}
 	if projectID == "" {
 		return fmt.Errorf("VERCEL_PROJECT_ID が未設定で .vercel/project.json もありません（先に vercel link するか指定してください）")
