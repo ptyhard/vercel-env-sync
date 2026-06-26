@@ -11,7 +11,7 @@ import (
 
 // --- repoFromGitRemote のパーサテスト ---
 
-func TestParseGitHubURL_SSH(t *testing.T) {
+func TestParseGitHubRemoteURL(t *testing.T) {
 	tests := []struct {
 		name      string
 		rawURL    string
