@@ -616,23 +616,39 @@ func isSafeYAMLKey(key string) bool {
 func runInit(argv []string) error {
 	opts := parseInitFlags(argv)
 
-	if !fileExists(opts.env) {
-		return die("env ファイルが見つかりません: %s", opts.env)
-	}
-
+	// os.ReadFile のエラーで分岐する。fileExists での事前チェックは
+	// 権限エラー等を「見つかりません」と誤判定し得るため使わない。
 	envText, err := os.ReadFile(opts.env)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return die("env ファイルが見つかりません: %s", opts.env)
+		}
 		return die("env ファイルの読み込みに失敗: %s", err)
 	}
 	envVars := parseDotenv(string(envText))
 	keys := sortedStrKeys(envVars)
 
-	if fileExists(opts.def) && !opts.force {
-		return die("既に存在します: %s（上書きするには --force）", opts.def)
-	}
-
 	text := buildInitYAML(keys)
-	if err := os.WriteFile(opts.def, []byte(text), 0o644); err != nil {
+
+	// 上書き保護は O_CREATE|O_EXCL でアトミックに行う。
+	// fileExists → WriteFile の2段階では TOCTOU 競合で意図せず
+	// 上書きし得るため、open のフラグで排他制御する。
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	if !opts.force {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	}
+	f, err := os.OpenFile(opts.def, flags, 0o644)
+	if err != nil {
+		if !opts.force && os.IsExist(err) {
+			return die("既に存在します: %s（上書きするには --force）", opts.def)
+		}
+		return die("定義ファイルの書き込みに失敗: %s", err)
+	}
+	if _, err := f.WriteString(text); err != nil {
+		f.Close()
+		return die("定義ファイルの書き込みに失敗: %s", err)
+	}
+	if err := f.Close(); err != nil {
 		return die("定義ファイルの書き込みに失敗: %s", err)
 	}
 
