@@ -32,7 +32,7 @@ func TestResolveGitHubRepo_FromEnv(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GITHUB_REPO", tc.repoEnv)
-			owner, repo, err := resolveGitHubRepo()
+			owner, repo, err := resolveGitHubRepo(&config.AppConfig{})
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("エラーを期待したが nil（owner=%q repo=%q）", owner, repo)

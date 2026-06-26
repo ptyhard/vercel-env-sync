@@ -1,0 +1,338 @@
+package config_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/ptyhard/env-sync/internal/config"
+)
+
+// --- LoadAppConfig / マージ / 優先順位テスト ---
+
+func TestLoadAppConfig_NoFiles_ReturnsZero(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if cfg.Vercel.Token != "" || cfg.Vercel.ProjectID != "" || cfg.GitHub.Token != "" {
+		t.Errorf("ゼロ値を期待したが非空フィールドがある: %+v", cfg)
+	}
+}
+
+func TestLoadAppConfig_GlobalOnly(t *testing.T) {
+	dir := t.TempDir()
+	globalDir := filepath.Join(dir, "env-sync")
+	if err := os.MkdirAll(globalDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	globalPath := filepath.Join(globalDir, "config.yaml")
+	if err := os.WriteFile(globalPath, []byte(`
+vercel:
+  token: global-token
+  project_id: global-pid
+github:
+  token: global-gh-token
+  repo: global/repo
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	// project config が存在しないディレクトリで実行
+	projectDir := t.TempDir()
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if cfg.Vercel.Token != "global-token" {
+		t.Errorf("Vercel.Token = %q, want global-token", cfg.Vercel.Token)
+	}
+	if cfg.Vercel.ProjectID != "global-pid" {
+		t.Errorf("Vercel.ProjectID = %q, want global-pid", cfg.Vercel.ProjectID)
+	}
+	if cfg.GitHub.Token != "global-gh-token" {
+		t.Errorf("GitHub.Token = %q, want global-gh-token", cfg.GitHub.Token)
+	}
+	if cfg.GitHub.Repo != "global/repo" {
+		t.Errorf("GitHub.Repo = %q, want global/repo", cfg.GitHub.Repo)
+	}
+}
+
+func TestLoadAppConfig_ProjectOnly(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "no-such-xdg"))
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env-sync.config.yaml"), []byte(`
+vercel:
+  token: project-token
+  team_id: project-team
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if cfg.Vercel.Token != "project-token" {
+		t.Errorf("Vercel.Token = %q, want project-token", cfg.Vercel.Token)
+	}
+	if cfg.Vercel.TeamID != "project-team" {
+		t.Errorf("Vercel.TeamID = %q, want project-team", cfg.Vercel.TeamID)
+	}
+}
+
+func TestLoadAppConfig_ProjectOverridesGlobal(t *testing.T) {
+	dir := t.TempDir()
+	globalDir := filepath.Join(dir, "env-sync")
+	if err := os.MkdirAll(globalDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(`
+vercel:
+  token: global-token
+  project_id: global-pid
+github:
+  token: global-gh
+  repo: global/repo
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	projectDir := t.TempDir()
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".env-sync.config.yaml"), []byte(`
+vercel:
+  token: project-token
+github:
+  repo: project/repo
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	// project が global を上書き
+	if cfg.Vercel.Token != "project-token" {
+		t.Errorf("Vercel.Token = %q, want project-token (project should override global)", cfg.Vercel.Token)
+	}
+	// project にない値は global が残る
+	if cfg.Vercel.ProjectID != "global-pid" {
+		t.Errorf("Vercel.ProjectID = %q, want global-pid (global fallback)", cfg.Vercel.ProjectID)
+	}
+	if cfg.GitHub.Token != "global-gh" {
+		t.Errorf("GitHub.Token = %q, want global-gh (global fallback)", cfg.GitHub.Token)
+	}
+	if cfg.GitHub.Repo != "project/repo" {
+		t.Errorf("GitHub.Repo = %q, want project/repo (project should override)", cfg.GitHub.Repo)
+	}
+}
+
+// --- 解決優先順位: 環境変数 > project config > global config ---
+
+func TestResolveVercelToken_EnvBeatsConfig(t *testing.T) {
+	t.Setenv("VERCEL_TOKEN", "env-token")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Token = "config-token"
+	if got := cfg.ResolveVercelToken(); got != "env-token" {
+		t.Errorf("ResolveVercelToken = %q, want env-token (env should win)", got)
+	}
+}
+
+func TestResolveVercelToken_FallsBackToConfig(t *testing.T) {
+	t.Setenv("VERCEL_TOKEN", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Token = "config-token"
+	if got := cfg.ResolveVercelToken(); got != "config-token" {
+		t.Errorf("ResolveVercelToken = %q, want config-token", got)
+	}
+}
+
+func TestResolveVercelProjectID_EnvBeatsConfig(t *testing.T) {
+	t.Setenv("VERCEL_PROJECT_ID", "env-pid")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.ProjectID = "config-pid"
+	if got := cfg.ResolveVercelProjectID(); got != "env-pid" {
+		t.Errorf("ResolveVercelProjectID = %q, want env-pid", got)
+	}
+}
+
+func TestResolveVercelTeamID_EnvBeatsConfig(t *testing.T) {
+	t.Setenv("VERCEL_TEAM_ID", "env-team")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.TeamID = "config-team"
+	if got := cfg.ResolveVercelTeamID(); got != "env-team" {
+		t.Errorf("ResolveVercelTeamID = %q, want env-team", got)
+	}
+}
+
+func TestResolveGitHubToken_EnvBeatsConfig(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "env-gh-token")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Token = "config-gh-token"
+	if got := cfg.ResolveGitHubToken(); got != "env-gh-token" {
+		t.Errorf("ResolveGitHubToken = %q, want env-gh-token", got)
+	}
+}
+
+func TestResolveGitHubRepo_EnvBeatsConfig(t *testing.T) {
+	t.Setenv("GITHUB_REPO", "env/repo")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Repo = "config/repo"
+	if got := cfg.ResolveGitHubRepo(); got != "env/repo" {
+		t.Errorf("ResolveGitHubRepo = %q, want env/repo", got)
+	}
+}
+
+func TestResolveGitHubRepo_FallsBackToConfig(t *testing.T) {
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Repo = "config/repo"
+	if got := cfg.ResolveGitHubRepo(); got != "config/repo" {
+		t.Errorf("ResolveGitHubRepo = %q, want config/repo", got)
+	}
+}
+
+// --- ファイル不在時の後方互換テスト ---
+
+func TestLoadAppConfig_BackwardCompat_NoConfigFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "absent"))
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	// 環境変数のみで動作するか確認（エラーなし）
+	t.Setenv("VERCEL_TOKEN", "env-only-token")
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatalf("config ファイルなしでもエラーなしを期待: %v", err)
+	}
+	if got := cfg.ResolveVercelToken(); got != "env-only-token" {
+		t.Errorf("ResolveVercelToken = %q, want env-only-token", got)
+	}
+}
+
+// --- パース失敗テスト ---
+
+func TestLoadAppConfig_InvalidYAML_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "no-global"))
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env-sync.config.yaml"), []byte(`
+vercel:
+  token: [invalid yaml
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.LoadAppConfig()
+	if err == nil {
+		t.Fatal("無効な YAML に対してエラーを期待したが nil")
+	}
+}
+
+// --- パーミッション警告テスト (stderr への出力確認) ---
+
+func TestLoadAppConfig_GlobalPermWarning_WritesToStderr(t *testing.T) {
+	dir := t.TempDir()
+	globalDir := filepath.Join(dir, "env-sync")
+	if err := os.MkdirAll(globalDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	globalPath := filepath.Join(globalDir, "config.yaml")
+	// パーミッション 0644（0600 でない）でトークンを書く
+	if err := os.WriteFile(globalPath, []byte(`
+vercel:
+  token: secret-token
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	projectDir := t.TempDir()
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+
+	// stderr をキャプチャして警告を確認
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+
+	_, loadErr := config.LoadAppConfig()
+
+	w.Close()
+	os.Stderr = origStderr
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	if loadErr != nil {
+		t.Fatalf("エラーなしを期待: %v", loadErr)
+	}
+	if output == "" {
+		t.Error("パーミッション警告が stderr に出力されることを期待したが何も出力されなかった")
+	}
+}
+
+func TestLoadAppConfig_GlobalPermOK_NoWarning(t *testing.T) {
+	dir := t.TempDir()
+	globalDir := filepath.Join(dir, "env-sync")
+	if err := os.MkdirAll(globalDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	globalPath := filepath.Join(globalDir, "config.yaml")
+	// パーミッション 0600（正しい）
+	if err := os.WriteFile(globalPath, []byte(`
+vercel:
+  token: secret-token
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	projectDir := t.TempDir()
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatal(err)
+	}
+
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+
+	_, loadErr := config.LoadAppConfig()
+
+	w.Close()
+	os.Stderr = origStderr
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	if loadErr != nil {
+		t.Fatalf("エラーなしを期待: %v", loadErr)
+	}
+	if output != "" {
+		t.Errorf("0600 の場合は警告不要だが出力あり: %q", output)
+	}
+}

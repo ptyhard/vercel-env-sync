@@ -60,13 +60,17 @@ func expandGitHubTasks(entries []provider.Entry) []githubTask {
 
 // Sync は GitHub Actions への環境変数/シークレット同期を行う。
 func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) error {
-	token := os.Getenv("GITHUB_TOKEN")
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return err
+	}
+	token := appCfg.ResolveGitHubToken()
 	if !opts.DryRun && token == "" {
 		return fmt.Errorf("GITHUB_TOKEN が未設定です")
 	}
 
 	// ---- リポジトリ解決 ----
-	owner, repo, err := resolveGitHubRepo()
+	owner, repo, err := resolveGitHubRepo(appCfg)
 	if err != nil {
 		return err
 	}
@@ -187,9 +191,9 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	return nil
 }
 
-// resolveGitHubRepo は GITHUB_REPO 環境変数または git remote から owner/repo を解決する。
-func resolveGitHubRepo() (owner, repo string, err error) {
-	repoEnv := strings.TrimSpace(os.Getenv("GITHUB_REPO"))
+// resolveGitHubRepo は config (環境変数 > config ファイル) または git remote から owner/repo を解決する。
+func resolveGitHubRepo(appCfg *config.AppConfig) (owner, repo string, err error) {
+	repoEnv := strings.TrimSpace(appCfg.ResolveGitHubRepo())
 	if repoEnv != "" {
 		parts := strings.Split(repoEnv, "/")
 		if len(parts) != 2 {

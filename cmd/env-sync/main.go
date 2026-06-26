@@ -11,16 +11,36 @@
 // 必須 (Vercel):
 //
 //	VERCEL_TOKEN        Vercel のアクセストークン (https://vercel.com/account/tokens)
-//	VERCEL_PROJECT_ID   プロジェクト ID。未指定なら .vercel/project.json から自動取得
+//	VERCEL_PROJECT_ID   プロジェクト ID。未指定なら config ファイルまたは .vercel/project.json から取得
 //
 // 任意 (Vercel):
 //
-//	VERCEL_TEAM_ID      チーム(Org) ID。未指定なら .vercel/project.json の orgId
+//	VERCEL_TEAM_ID      チーム(Org) ID。未指定なら config ファイルまたは .vercel/project.json の orgId
 //
 // 必須 (GitHub):
 //
 //	GITHUB_TOKEN        GitHub のアクセストークン（dry-run 時は不要）
-//	GITHUB_REPO         owner/repo 形式。未指定なら git remote から取得
+//	GITHUB_REPO         owner/repo 形式。未指定なら config ファイルまたは git remote から取得
+//
+// config ファイル:
+//
+// 環境変数の代わりに YAML ファイルでトークン・ID を設定できる。
+// 解決優先順位: 環境変数 > project config > global config > 既存フォールバック
+//
+//	global:  ~/.config/env-sync/config.yaml (XDG_CONFIG_HOME を尊重)
+//	project: .env-sync.config.yaml (カレントディレクトリ)
+//
+// YAML スキーマ:
+//
+//	vercel:
+//	  token:      <Vercel トークン>
+//	  project_id: <プロジェクト ID>
+//	  team_id:    <チーム ID>
+//	github:
+//	  token: <GitHub トークン>
+//	  repo:  <owner/repo>
+//
+// セキュリティ: global config にトークンが含まれていてパーミッションが 0600 でない場合は警告を出力する。
 //
 // 必須 (GCP):
 //
@@ -206,12 +226,12 @@ func printUsage() {
 
 環境変数（Vercel）:
   VERCEL_TOKEN       Vercel のアクセストークン（必須、dry-run 時は不要）
-  VERCEL_PROJECT_ID  プロジェクト ID。未指定なら .vercel/project.json から取得
-  VERCEL_TEAM_ID     チーム(Org) ID。未指定なら .vercel/project.json の orgId
+  VERCEL_PROJECT_ID  プロジェクト ID。未指定なら config ファイルまたは .vercel/project.json から取得
+  VERCEL_TEAM_ID     チーム(Org) ID。未指定なら config ファイルまたは .vercel/project.json の orgId
 
 環境変数（GitHub）:
   GITHUB_TOKEN  GitHub のアクセストークン（必須、dry-run 時は不要）
-  GITHUB_REPO   owner/repo 形式のリポジトリ名（未指定なら git remote origin から取得）
+  GITHUB_REPO   owner/repo 形式のリポジトリ名（未指定なら config ファイルまたは git remote origin から取得）
 
 環境変数（GCP）:
   GCP_PROJECT_ID  Secret Manager の対象 GCP プロジェクト ID（必須）
@@ -219,7 +239,23 @@ func printUsage() {
         GOOGLE_APPLICATION_CREDENTIALS でサービスアカウント鍵を指定、
         または gcloud auth application-default login で ADC を設定する。
 
-YAML スキーマ:
+config ファイル（環境変数の代替）:
+  解決優先順位: 環境変数 > project config > global config > 既存フォールバック
+  global:  ~/.config/env-sync/config.yaml  (XDG_CONFIG_HOME を尊重)
+  project: .env-sync.config.yaml           (カレントディレクトリ)
+
+  スキーマ:
+    vercel:
+      token:      <Vercel トークン>
+      project_id: <プロジェクト ID>
+      team_id:    <チーム ID>
+    github:
+      token: <GitHub トークン>
+      repo:  <owner/repo>
+
+  ※ global config にトークンが含まれていてパーミッションが 0600 でない場合は警告を出力します
+
+YAML スキーマ（定義ファイル env-sync.yaml）:
   secret: true|false  シークレットとして登録するか（デフォルト true）
                       Vercel: true→sensitive / false→plain
                       GitHub: true→Secret / false→Variable

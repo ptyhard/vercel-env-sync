@@ -186,12 +186,77 @@ VERCEL_TOKEN=xxxxx ./env-sync --env .env.production --yes
 | `--yes` / `-y` | – | 送信前の確認をスキップ |
 | `--force` | – | `init` 時に既存の def ファイルを上書きする |
 | `VERCEL_TOKEN` | ◯(Vercel) | Vercel アクセストークン（dry-run 時は不要） |
-| `VERCEL_PROJECT_ID` | △(Vercel) | プロジェクト ID。未指定なら `.vercel/project.json` から自動取得 |
-| `VERCEL_TEAM_ID` | –(Vercel) | チーム(Org) ID。未指定なら `.vercel/project.json` の `orgId` |
+| `VERCEL_PROJECT_ID` | △(Vercel) | プロジェクト ID。未指定なら config ファイルまたは `.vercel/project.json` から自動取得 |
+| `VERCEL_TEAM_ID` | –(Vercel) | チーム(Org) ID。未指定なら config ファイルまたは `.vercel/project.json` の `orgId` |
 | `GITHUB_TOKEN` | ◯(GitHub) | GitHub アクセストークン（dry-run 時は不要） |
-| `GITHUB_REPO` | –(GitHub) | `owner/repo` 形式。未指定なら `git remote origin` から自動取得 |
+| `GITHUB_REPO` | –(GitHub) | `owner/repo` 形式。未指定なら config ファイルまたは `git remote origin` から自動取得 |
 
 > **移行案内**: `--github-env <name>` フラグは廃止されました。GitHub の named environment への登録は `env-sync.yaml` の `environments` フィールドで指定してください。
+
+## config ファイルによる認証情報・ID の管理
+
+環境変数の代わりに YAML ファイルでトークンや ID を管理できます。
+
+### 解決優先順位
+
+```
+環境変数 > project config > global config > 既存フォールバック（.vercel/project.json / git remote）
+```
+
+環境変数が設定されていれば常に優先されます。
+
+### config ファイルの場所
+
+| 種別 | パス |
+|------|------|
+| global | `~/.config/env-sync/config.yaml`（`XDG_CONFIG_HOME` を尊重） |
+| project | `.env-sync.config.yaml`（カレントディレクトリ） |
+
+どちらのファイルも存在しない場合は従来通り環境変数＋既存フォールバックのみで動作します（後方互換）。
+
+### スキーマ
+
+```yaml
+vercel:
+  token:      <Vercel アクセストークン>
+  project_id: <プロジェクト ID>
+  team_id:    <チーム(Org) ID>
+github:
+  token: <GitHub アクセストークン>
+  repo:  <owner/repo 形式のリポジトリ名>
+```
+
+### セキュリティ
+
+- global config にトークンが含まれていてファイルパーミッションが `0600` でない場合、実行時に stderr へ警告を出力します。
+- `chmod 0600 ~/.config/env-sync/config.yaml` で修正してください。
+- 暗号化保存・キーチェーン連携は対象外です（将来検討）。
+
+### 使用例
+
+```bash
+# global config (~/.config/env-sync/config.yaml) を作成
+mkdir -p ~/.config/env-sync
+cat > ~/.config/env-sync/config.yaml <<'EOF'
+vercel:
+  token: your-vercel-token
+github:
+  token: your-github-token
+EOF
+chmod 0600 ~/.config/env-sync/config.yaml
+
+# project config でプロジェクト固有の設定を上書き
+cat > .env-sync.config.yaml <<'EOF'
+vercel:
+  project_id: prj_xxxxxxxx
+  team_id: team_xxxxxxxx
+github:
+  repo: myorg/myrepo
+EOF
+
+# 環境変数なしで実行
+env-sync --env .env.production
+```
 
 ## GitHub Actions モード
 
