@@ -571,13 +571,45 @@ func buildInitYAML(keys []string) string {
 			typ = "sensitive"
 		}
 		sb.WriteString("  ")
-		sb.WriteString(key)
+		sb.WriteString(yamlKey(key))
 		sb.WriteString(": { type: ")
 		sb.WriteString(typ)
 		sb.WriteString(" }\n")
 	}
 
 	return sb.String()
+}
+
+// yamlKey は YAML のマップキーとして安全に出力できる形に整える。
+// 環境変数名として一般的な ^[A-Za-z_][A-Za-z0-9_]*$ はそのまま、
+// それ以外（空白や : を含む等）は単一引用符でクォートして
+// 生成 YAML がパース不能にならないようにする。
+func yamlKey(key string) string {
+	if isSafeYAMLKey(key) {
+		return key
+	}
+	// 単一引用符内のリテラル ' は '' でエスケープする。
+	return "'" + strings.ReplaceAll(key, "'", "''") + "'"
+}
+
+// isSafeYAMLKey は key が ^[A-Za-z_][A-Za-z0-9_]*$ に一致するかを返す。
+func isSafeYAMLKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		isLetter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+		isDigit := c >= '0' && c <= '9'
+		if i == 0 {
+			if !isLetter {
+				return false
+			}
+		} else if !isLetter && !isDigit {
+			return false
+		}
+	}
+	return true
 }
 
 // runInit は init サブコマンドのメイン処理。

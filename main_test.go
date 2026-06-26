@@ -211,7 +211,7 @@ func TestRunInit_OverwriteProtection(t *testing.T) {
 	// --force なしで実行 → エラーになるはず
 	err := runInit([]string{"--env", envFile, "--def", defFile})
 	if err == nil {
-		t.Error("--force なしで既存ファイルが上書きされてしまった（エラーが返らなかった）")
+		t.Fatal("--force なしで既存ファイルが上書きされてしまった（エラーが返らなかった）")
 	}
 	if !strings.Contains(err.Error(), "上書きするには --force") {
 		t.Errorf("エラーメッセージが想定と異なる: %v", err)
