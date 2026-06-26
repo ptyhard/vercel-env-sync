@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
 
 // parseFlags のテスト
 
@@ -82,5 +86,49 @@ func TestParseFlags_ProviderEqualForm(t *testing.T) {
 	opts := parseFlags([]string{"--provider=github"})
 	if opts.provider != "github" {
 		t.Errorf("--provider=github が解析されない: got %q", opts.provider)
+	}
+}
+
+// ProviderVal の YAML パーステスト
+
+func TestProviderVal_UnmarshalYAML_String(t *testing.T) {
+	type T struct {
+		Provider *ProviderVal `yaml:"provider"`
+	}
+	var v T
+	if err := yaml.Unmarshal([]byte("provider: vercel"), &v); err != nil {
+		t.Fatalf("Unmarshal エラー: %v", err)
+	}
+	if v.Provider == nil || len(v.Provider.Values) != 1 || v.Provider.Values[0] != "vercel" {
+		t.Errorf("ProviderVal = %v, want [vercel]", v.Provider)
+	}
+}
+
+func TestProviderVal_UnmarshalYAML_Sequence(t *testing.T) {
+	type T struct {
+		Provider *ProviderVal `yaml:"provider"`
+	}
+	var v T
+	if err := yaml.Unmarshal([]byte("provider: [vercel, github]"), &v); err != nil {
+		t.Fatalf("Unmarshal エラー: %v", err)
+	}
+	if v.Provider == nil || len(v.Provider.Values) != 2 {
+		t.Fatalf("ProviderVal.Values len = %d, want 2", len(v.Provider.Values))
+	}
+	if v.Provider.Values[0] != "vercel" || v.Provider.Values[1] != "github" {
+		t.Errorf("ProviderVal.Values = %v, want [vercel github]", v.Provider.Values)
+	}
+}
+
+func TestProviderVal_UnmarshalYAML_Nil(t *testing.T) {
+	type T struct {
+		Provider *ProviderVal `yaml:"provider"`
+	}
+	var v T
+	if err := yaml.Unmarshal([]byte("secret: true"), &v); err != nil {
+		t.Fatalf("Unmarshal エラー: %v", err)
+	}
+	if v.Provider != nil {
+		t.Errorf("provider フィールド未指定なのに非 nil: %v", v.Provider)
 	}
 }

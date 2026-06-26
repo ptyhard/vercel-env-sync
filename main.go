@@ -27,13 +27,14 @@
 //	--provider <name>         同期先（デフォルト vercel）
 //	--env  <file>             値を読む env ファイル（デフォルト .env）
 //	--def  <file>             定義 YAML（デフォルト env-sync.yaml）
-//	--dry-run                 実際には送信せず、登録予定の key/secret/environments だけ表示（値は出さない）
+//	--dry-run                 実際には送信せず、登録予定の key/secret/environments/providers だけ表示（値は出さない）
 //	--yes, -y                 送信前の確認をスキップ
 package main
 
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -104,18 +105,61 @@ func run() error {
 		}
 	}
 
-	// ---- Entry に変換 ----
-	entries, err := resolveEntries(def, envVars, defKeys)
+	// ---- Entry に変換（provider 解決を含む） ----
+	entries, err := resolveEntries(def, envVars, defKeys, opts.provider)
 	if err != nil {
 		return err
 	}
 
-	// ---- provider で分岐（registry ベース） ----
-	p, ok := lookupProvider(opts.provider)
-	if !ok {
-		return die("未登録の provider: %s", opts.provider)
+	// ---- プロバイダーごとに振り分け ----
+	providerEntries := map[string][]Entry{}
+	for _, e := range entries {
+		for _, pname := range e.Providers {
+			providerEntries[pname] = append(providerEntries[pname], e)
+		}
 	}
-	return p.Sync(opts, entries)
+
+	// ---- dry-run: 統合一覧表示して終了 ----
+	if opts.dryRun {
+		if len(entries) == 0 {
+			fmt.Println("登録対象がありません")
+		} else {
+			fmt.Printf("同期対象 %d 件:\n", len(entries))
+			for _, e := range entries {
+				secretStr := "secret=true"
+				if !e.Secret {
+					secretStr = "secret=false"
+				}
+				envsStr := strings.Join(e.Environments, ", ")
+				if envsStr == "" {
+					envsStr = "(デフォルト)"
+				}
+				fmt.Printf("  %-30s  %s  environments=[%s]  providers=[%s]\n",
+					e.Key, secretStr, envsStr, strings.Join(e.Providers, ", "))
+			}
+		}
+		fmt.Println("\n[dry-run] 送信しません")
+		return nil
+	}
+
+	// entries が 0 件なら同期対象なしを明示して終了
+	if len(entries) == 0 {
+		fmt.Println("登録対象がありません")
+		return nil
+	}
+
+	// ---- プロバイダーへ同期（登録順） ----
+	for _, pname := range registeredProviderNames() {
+		ents, ok := providerEntries[pname]
+		if !ok {
+			continue
+		}
+		p, _ := lookupProvider(pname)
+		if err := p.Sync(opts, ents); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func printUsage() {
@@ -133,7 +177,7 @@ func printUsage() {
   --provider <name>         同期先（デフォルト vercel）
   --env <file>              値を読む env ファイル（デフォルト .env）
   --def <file>              定義 YAML（デフォルト env-sync.yaml）
-  --dry-run                 送信せず登録予定の key/secret/environments だけ表示
+  --dry-run                 送信せず登録予定の key/secret/environments/providers を表示
   --yes, -y                 送信前の確認をスキップ
   --version                 バージョン情報を表示して終了
   -h, --help                このヘルプを表示

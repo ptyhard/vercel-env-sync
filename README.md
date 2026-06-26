@@ -74,6 +74,38 @@ variables:
 |---|---|---|
 | `secret` | `bool` | `true`（デフォルト）: シークレット登録 / `false`: 平文登録 |
 | `environments` | `[]string` | 登録先環境の配列。省略すると `defaults.environments` を継承 |
+| `provider` | `string` または `[]string` | 同期先プロバイダー。省略すると `defaults.provider` → CLI `--provider` フラグを使用 |
+
+#### `provider` フィールドの使い方
+
+変数ごとに同期先を指定できます。1 つの `env-sync.yaml` 内で Vercel と GitHub Actions を混在させることが可能です。
+
+```yaml
+defaults:
+  secret: true
+  # defaults.provider を指定するとすべての変数のデフォルト同期先を変更できる
+  # provider: github
+
+variables:
+  DATABASE_URL:
+    secret: true
+    provider: vercel        # Vercel のみに同期
+
+  GITHUB_ACTIONS_TOKEN:
+    secret: true
+    provider: github        # GitHub Actions のみに同期
+
+  SHARED_SECRET:
+    secret: true
+    provider: [vercel, github]  # 両方に同期
+
+  PUBLIC_API_URL:
+    secret: false           # provider 未指定 → --provider フラグのデフォルト（vercel）
+```
+
+解決優先順位（高い順）: **変数個別の `provider`** → **`defaults.provider`** → **CLI `--provider` フラグ**（デフォルト `vercel`）
+
+不正な値（`vercel` / `github` 以外）を指定するとエラーで中止します。
 
 #### Vercel における各フィールドの意味
 
