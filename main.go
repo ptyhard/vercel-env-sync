@@ -24,7 +24,7 @@
 //
 // オプション:
 //
-//	--provider vercel|github  同期先（デフォルト vercel）
+//	--provider <name>         同期先（デフォルト vercel）
 //	--env  <file>             値を読む env ファイル（デフォルト .env）
 //	--def  <file>             定義 YAML（デフォルト env-sync.yaml）
 //	--dry-run                 実際には送信せず、登録予定の key/secret/environments だけ表示（値は出さない）
@@ -130,7 +130,7 @@ func printUsage() {
   env-sync init [--env <file>] [--def <file>] [--force]
 
 オプション（同期）:
-  --provider vercel|github  同期先（デフォルト vercel）
+  --provider <name>         同期先（デフォルト vercel）
   --env <file>              値を読む env ファイル（デフォルト .env）
   --def <file>              定義 YAML（デフォルト env-sync.yaml）
   --dry-run                 送信せず登録予定の key/secret/environments だけ表示

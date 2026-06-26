@@ -35,11 +35,13 @@ func resolveEntries(def definition, envVars map[string]string, defKeys []string)
 		}
 
 		// environments の解決
+		// nil = 未指定（YAML に書いていない）、非 nil = 明示指定（空配列 [] も含む）として区別する。
+		// varConf が nil でないときは defaults より優先して採用し、明示空でも defaults を上書きできる。
 		var envs []string
-		if len(def.Defaults.Environments) > 0 {
+		if def.Defaults.Environments != nil {
 			envs = def.Defaults.Environments
 		}
-		if len(conf.Environments) > 0 {
+		if conf.Environments != nil {
 			envs = conf.Environments
 		}
 

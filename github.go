@@ -345,6 +345,7 @@ func githubPutSecret(client *http.Client, token, owner, repo, envScope, name, en
 	defer res.Body.Close()
 
 	if res.StatusCode == http.StatusCreated || res.StatusCode == http.StatusNoContent {
+		io.Copy(io.Discard, res.Body) //nolint:errcheck // drain で接続を再利用可能にする
 		return nil
 	}
 
@@ -379,9 +380,11 @@ func githubVariableExists(client *http.Client, token, owner, repo, envScope, nam
 	defer res.Body.Close()
 
 	if res.StatusCode == http.StatusOK {
+		io.Copy(io.Discard, res.Body) //nolint:errcheck // drain で接続を再利用可能にする
 		return true, nil
 	}
 	if res.StatusCode == http.StatusNotFound {
+		io.Copy(io.Discard, res.Body) //nolint:errcheck // drain で接続を再利用可能にする
 		return false, nil
 	}
 
@@ -422,6 +425,7 @@ func githubCreateVariable(client *http.Client, token, owner, repo, envScope, nam
 	defer res.Body.Close()
 
 	if res.StatusCode == http.StatusCreated {
+		io.Copy(io.Discard, res.Body) //nolint:errcheck // drain で接続を再利用可能にする
 		return nil
 	}
 
@@ -462,6 +466,7 @@ func githubUpdateVariable(client *http.Client, token, owner, repo, envScope, nam
 	defer res.Body.Close()
 
 	if res.StatusCode == http.StatusNoContent {
+		io.Copy(io.Discard, res.Body) //nolint:errcheck // drain で接続を再利用可能にする
 		return nil
 	}
 
