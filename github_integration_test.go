@@ -260,6 +260,77 @@ func TestGitHubCreateVariable_EnvironmentScope(t *testing.T) {
 	}
 }
 
+func TestGitHubPutSecret_EnvironmentScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("method = %s, want PUT", r.Method)
+		}
+		if r.URL.Path != "/repos/owner/repo/environments/staging/secrets/MY_SECRET" {
+			t.Errorf("path = %s, want environment-scoped secret PUT", r.URL.Path)
+		}
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["encrypted_value"] != "enc==" {
+			t.Errorf("encrypted_value = %q", body["encrypted_value"])
+		}
+		if body["key_id"] != "kid" {
+			t.Errorf("key_id = %q", body["key_id"])
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	withGitHubAPIBase(t, srv.URL)
+
+	if err := githubPutSecret(srv.Client(), "tok", "owner", "repo", "staging", "MY_SECRET", "enc==", "kid"); err != nil {
+		t.Fatalf("予期しないエラー: %v", err)
+	}
+}
+
+func TestGitHubVariableExists_EnvironmentScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/repos/owner/repo/environments/staging/variables/MY_VAR" {
+			t.Errorf("path = %s, want environment-scoped variable GET", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	withGitHubAPIBase(t, srv.URL)
+
+	got, err := githubVariableExists(srv.Client(), "tok", "owner", "repo", "staging", "MY_VAR")
+	if err != nil {
+		t.Fatalf("予期しないエラー: %v", err)
+	}
+	if !got {
+		t.Error("exists = false, want true")
+	}
+}
+
+func TestGitHubUpdateVariable_EnvironmentScope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("method = %s, want PATCH", r.Method)
+		}
+		if r.URL.Path != "/repos/owner/repo/environments/staging/variables/MY_VAR" {
+			t.Errorf("path = %s, want environment-scoped variable PATCH", r.URL.Path)
+		}
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["name"] != "MY_VAR" || body["value"] != "hello" {
+			t.Errorf("body = %v", body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	withGitHubAPIBase(t, srv.URL)
+
+	if err := githubUpdateVariable(srv.Client(), "tok", "owner", "repo", "staging", "MY_VAR", "hello"); err != nil {
+		t.Fatalf("予期しないエラー: %v", err)
+	}
+}
+
 func TestParseGitHubErrorBody(t *testing.T) {
 	cases := []struct {
 		name string

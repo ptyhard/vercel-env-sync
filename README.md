@@ -1,8 +1,8 @@
 # vercel-env-sync
 
 定義ファイル `vercel-env.yaml` で宣言した環境変数を **Vercel** または **GitHub Actions** へ一括登録（同期）する Go 製 CLI。
-Vercel REST API (`POST /v10/projects/{id}/env?upsert=true`) を使うため、再実行すると既存の変数は **更新（upsert）** される。
-GitHub Actions では Secrets（sealed box 暗号化）と Variables（平文）の両方に対応する。
+Vercel モードでは Vercel REST API (`POST /v10/projects/{id}/env?upsert=true`) を使うため、再実行すると既存の変数は **更新（upsert）** される。
+GitHub Actions モードでは Secrets（sealed box 暗号化）と Variables（平文）の両方に対応する。
 
 [ptyhard/arg-next の `scripts/vercel-env-push.mjs`](../arg-next/scripts/vercel-env-push.mjs) と同じ仕様を Go で実装したもの。
 
