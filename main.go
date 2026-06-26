@@ -41,6 +41,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ldflags で注入するバージョン情報。
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 const apiBase = "https://api.vercel.com"
 
 var validTypes = map[string]bool{
@@ -316,6 +323,9 @@ func parseFlags(argv []string) options {
 			opts.dryRun = true
 		case arg == "--yes" || arg == "-yes" || arg == "-y":
 			opts.yes = true
+		case arg == "--version" || arg == "-version":
+			fmt.Printf("vercel-env-sync version %s (commit: %s, built: %s)\n", version, commit, date)
+			os.Exit(0)
 		case arg == "-h" || arg == "--help":
 			printUsage()
 			os.Exit(0)
