@@ -60,7 +60,10 @@ var (
 )
 
 const apiBase = "https://api.vercel.com"
-const githubAPIBase = "https://api.github.com"
+
+// githubAPIBase は GitHub REST API のベース URL。テストで httptest.Server を
+// 指す差し替えができるよう var にしている。
+var githubAPIBase = "https://api.github.com"
 
 var validTypes = map[string]bool{
 	"plain":     true,
