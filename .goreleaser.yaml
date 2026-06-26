@@ -40,13 +40,10 @@ release:
 
 homebrew_casks:
   - name: vercel-env-sync
-    # tap は別リポジトリではなく本リポジトリの Casks/ に同居させる。
-    # token を省略すると GITHUB_TOKEN が使われるため、追加の PAT は不要。
     repository:
       owner: ptyhard
-      name: vercel-env-sync
-      branch: main
-    directory: Casks
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/ptyhard/vercel-env-sync
     description: "Sync environment variables to Vercel from a definition file"
     binaries:
