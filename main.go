@@ -142,6 +142,12 @@ func run() error {
 		return nil
 	}
 
+	// entries が 0 件なら同期対象なしを明示して終了
+	if len(entries) == 0 {
+		fmt.Println("登録対象がありません")
+		return nil
+	}
+
 	// ---- プロバイダーへ同期（登録順） ----
 	for _, pname := range registeredProviderNames() {
 		ents, ok := providerEntries[pname]
