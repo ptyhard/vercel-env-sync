@@ -507,15 +507,24 @@ func parseInitFlags(argv []string) initOptions {
 			}
 			return argv[i]
 		}
+		// requireValue は空文字のパス指定（例: --env=）を弾く。
+		// 空のまま後段に渡すと分かりにくいエラーになるため parse 時点で終了する。
+		requireValue := func(flag, v string) string {
+			if v == "" {
+				fmt.Fprintf(os.Stderr, "エラー: %s には空でない値が必要です\n", flag)
+				os.Exit(1)
+			}
+			return v
+		}
 		switch {
 		case arg == "--env" || arg == "-env":
-			opts.env = next()
+			opts.env = requireValue("--env", next())
 		case strings.HasPrefix(arg, "--env="):
-			opts.env = strings.TrimPrefix(arg, "--env=")
+			opts.env = requireValue("--env", strings.TrimPrefix(arg, "--env="))
 		case arg == "--def" || arg == "-def":
-			opts.def = next()
+			opts.def = requireValue("--def", next())
 		case strings.HasPrefix(arg, "--def="):
-			opts.def = strings.TrimPrefix(arg, "--def=")
+			opts.def = requireValue("--def", strings.TrimPrefix(arg, "--def="))
 		case arg == "--force" || arg == "-force":
 			opts.force = true
 		case arg == "-h" || arg == "--help":
@@ -623,7 +632,7 @@ func runInit(argv []string) error {
 		if os.IsNotExist(err) {
 			return die("env ファイルが見つかりません: %s", opts.env)
 		}
-		return die("env ファイルの読み込みに失敗: %s", err)
+		return die("env ファイルの読み込みに失敗: %s: %s", opts.env, err)
 	}
 	envVars := parseDotenv(string(envText))
 	keys := sortedStrKeys(envVars)
@@ -642,14 +651,14 @@ func runInit(argv []string) error {
 		if !opts.force && os.IsExist(err) {
 			return die("既に存在します: %s（上書きするには --force）", opts.def)
 		}
-		return die("定義ファイルの書き込みに失敗: %s", err)
+		return die("定義ファイルの書き込みに失敗: %s: %s", opts.def, err)
 	}
 	if _, err := f.WriteString(text); err != nil {
 		f.Close()
-		return die("定義ファイルの書き込みに失敗: %s", err)
+		return die("定義ファイルの書き込みに失敗: %s: %s", opts.def, err)
 	}
 	if err := f.Close(); err != nil {
-		return die("定義ファイルの書き込みに失敗: %s", err)
+		return die("定義ファイルの書き込みに失敗: %s: %s", opts.def, err)
 	}
 
 	fmt.Printf("生成しました: %s\n", opts.def)
