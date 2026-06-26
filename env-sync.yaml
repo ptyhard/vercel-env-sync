@@ -16,6 +16,14 @@
 #           Vercel: production|preview|development（空なら production と preview）
 #           GitHub: named environment 名（空なら repo レベル）
 #           ※ GitHub の named environment は事前に作成が必要
+#
+#   provider: vercel|github|[vercel, github]
+#           同期先プロバイダーを変数ごとに指定する。
+#           - provider: vercel          Vercel にのみ送る
+#           - provider: github          GitHub Actions にのみ送る
+#           - provider: [vercel, github] 両方に送る
+#           解決優先順位: 変数個別 > defaults > CLI --provider フラグ（デフォルト vercel）
+#           ※ 未指定なら defaults.provider → --provider フラグのデフォルト（vercel）が使われる
 
 defaults:
   secret: true
@@ -25,3 +33,8 @@ variables:
   # NEXT_PUBLIC_API_BASE_URL: { secret: false }
   # DATABASE_URL:             { secret: true }
   # STAGING_KEY:              { secret: true, environments: [production] }
+  #
+  # ---- provider 混在の例 ----
+  # VERCEL_ONLY_KEY:          { provider: vercel }
+  # GITHUB_ONLY_KEY:          { provider: github }
+  # SHARED_KEY:               { provider: [vercel, github] }

@@ -34,6 +34,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -104,18 +105,46 @@ func run() error {
 		}
 	}
 
-	// ---- Entry に変換 ----
-	entries, err := resolveEntries(def, envVars, defKeys)
+	// ---- Entry に変換（provider 解決を含む） ----
+	entries, err := resolveEntries(def, envVars, defKeys, opts.provider)
 	if err != nil {
 		return err
 	}
 
-	// ---- provider で分岐（registry ベース） ----
-	p, ok := lookupProvider(opts.provider)
-	if !ok {
-		return die("未登録の provider: %s", opts.provider)
+	// ---- プロバイダーごとに振り分け ----
+	providerEntries := map[string][]Entry{}
+	for _, e := range entries {
+		for _, pname := range e.Providers {
+			providerEntries[pname] = append(providerEntries[pname], e)
+		}
 	}
-	return p.Sync(opts, entries)
+
+	// ---- dry-run: 統合一覧表示して終了 ----
+	if opts.dryRun {
+		if len(entries) == 0 {
+			fmt.Println("登録対象がありません")
+		} else {
+			fmt.Printf("同期対象 %d 件:\n", len(entries))
+			for _, e := range entries {
+				fmt.Printf("  %s -> %s\n", e.Key, strings.Join(e.Providers, ", "))
+			}
+		}
+		fmt.Println("\n[dry-run] 送信しません")
+		return nil
+	}
+
+	// ---- プロバイダーへ同期（登録順） ----
+	for _, pname := range registeredProviderNames() {
+		ents, ok := providerEntries[pname]
+		if !ok {
+			continue
+		}
+		p, _ := lookupProvider(pname)
+		if err := p.Sync(opts, ents); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func printUsage() {

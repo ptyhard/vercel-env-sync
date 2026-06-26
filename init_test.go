@@ -329,7 +329,7 @@ func TestInitYAML_RoundTripResolvesEntries(t *testing.T) {
 		"BAR_SECRET":      "secret-value",
 	}
 	defKeys := sortedKeys(def.Variables)
-	entries, err := resolveEntries(def, envVars, defKeys)
+	entries, err := resolveEntries(def, envVars, defKeys, "vercel")
 	if err != nil {
 		t.Fatalf("resolveEntries エラー: %v", err)
 	}

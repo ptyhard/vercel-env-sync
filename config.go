@@ -4,7 +4,31 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
+
+// ProviderVal はYAMLで string か []string を受け付ける provider フィールドの型。
+// `provider: vercel` でも `provider: [vercel, github]` でも解析できる。
+type ProviderVal struct {
+	Values []string
+}
+
+func (p *ProviderVal) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		p.Values = []string{value.Value}
+	case yaml.SequenceNode:
+		var ss []string
+		if err := value.Decode(&ss); err != nil {
+			return err
+		}
+		p.Values = ss
+	default:
+		return fmt.Errorf("provider は文字列または文字列の配列で指定してください")
+	}
+	return nil
+}
 
 const apiBase = "https://api.vercel.com"
 
@@ -19,15 +43,17 @@ type options struct {
 
 // varConf は定義 YAML の variables 配下 1 件分の設定。
 type varConf struct {
-	Secret       *bool    `yaml:"secret"`
-	Environments []string `yaml:"environments"`
+	Secret       *bool        `yaml:"secret"`
+	Environments []string     `yaml:"environments"`
+	Provider     *ProviderVal `yaml:"provider"`
 }
 
 // definition は定義 YAML 全体の構造。
 type definition struct {
 	Defaults struct {
-		Secret       *bool    `yaml:"secret"`
-		Environments []string `yaml:"environments"`
+		Secret       *bool        `yaml:"secret"`
+		Environments []string     `yaml:"environments"`
+		Provider     *ProviderVal `yaml:"provider"`
 	} `yaml:"defaults"`
 	Variables map[string]varConf `yaml:"variables"`
 }
