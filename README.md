@@ -255,7 +255,7 @@ github:
 EOF
 
 # 環境変数なしで実行
-env-sync --env .env.production
+./env-sync --env .env.production
 ```
 
 ## GitHub Actions モード

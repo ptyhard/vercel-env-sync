@@ -8,14 +8,30 @@ import (
 	"github.com/ptyhard/env-sync/internal/config"
 )
 
+// chdirCleanup は os.Chdir でカレントディレクトリを変更し、
+// テスト終了時に元のディレクトリへ戻す t.Cleanup を登録する。
+func chdirCleanup(t *testing.T, dir string) {
+	t.Helper()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Errorf("元ディレクトリへの復元に失敗: %v", err)
+		}
+	})
+}
+
 // --- LoadAppConfig / マージ / 優先順位テスト ---
 
 func TestLoadAppConfig_NoFiles_ReturnsZero(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "xdg"))
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	chdirCleanup(t, dir)
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
 		t.Fatalf("エラーなしを期待: %v", err)
@@ -45,9 +61,7 @@ github:
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	// project config が存在しないディレクトリで実行
 	projectDir := t.TempDir()
-	if err := os.Chdir(projectDir); err != nil {
-		t.Fatal(err)
-	}
+	chdirCleanup(t, projectDir)
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
 		t.Fatalf("エラーなしを期待: %v", err)
@@ -69,9 +83,7 @@ github:
 func TestLoadAppConfig_ProjectOnly(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "no-such-xdg"))
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	chdirCleanup(t, dir)
 	if err := os.WriteFile(filepath.Join(dir, ".env-sync.config.yaml"), []byte(`
 vercel:
   token: project-token
@@ -110,9 +122,7 @@ github:
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
 	projectDir := t.TempDir()
-	if err := os.Chdir(projectDir); err != nil {
-		t.Fatal(err)
-	}
+	chdirCleanup(t, projectDir)
 	if err := os.WriteFile(filepath.Join(projectDir, ".env-sync.config.yaml"), []byte(`
 vercel:
   token: project-token
@@ -212,9 +222,7 @@ func TestResolveGitHubRepo_FallsBackToConfig(t *testing.T) {
 func TestLoadAppConfig_BackwardCompat_NoConfigFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "absent"))
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	chdirCleanup(t, dir)
 	// 環境変数のみで動作するか確認（エラーなし）
 	t.Setenv("VERCEL_TOKEN", "env-only-token")
 	cfg, err := config.LoadAppConfig()
@@ -231,9 +239,7 @@ func TestLoadAppConfig_BackwardCompat_NoConfigFiles(t *testing.T) {
 func TestLoadAppConfig_InvalidYAML_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "no-global"))
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
+	chdirCleanup(t, dir)
 	if err := os.WriteFile(filepath.Join(dir, ".env-sync.config.yaml"), []byte(`
 vercel:
   token: [invalid yaml
@@ -264,9 +270,7 @@ vercel:
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	projectDir := t.TempDir()
-	if err := os.Chdir(projectDir); err != nil {
-		t.Fatal(err)
-	}
+	chdirCleanup(t, projectDir)
 
 	// stderr をキャプチャして警告を確認
 	origStderr := os.Stderr
@@ -275,11 +279,14 @@ vercel:
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = origStderr
+		r.Close()
+	})
 
 	_, loadErr := config.LoadAppConfig()
 
 	w.Close()
-	os.Stderr = origStderr
 
 	buf := make([]byte, 4096)
 	n, _ := r.Read(buf)
@@ -309,21 +316,23 @@ vercel:
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	projectDir := t.TempDir()
-	if err := os.Chdir(projectDir); err != nil {
-		t.Fatal(err)
-	}
+	chdirCleanup(t, projectDir)
 
+	// stderr をキャプチャして警告がないことを確認
 	origStderr := os.Stderr
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = origStderr
+		r.Close()
+	})
 
 	_, loadErr := config.LoadAppConfig()
 
 	w.Close()
-	os.Stderr = origStderr
 
 	buf := make([]byte, 4096)
 	n, _ := r.Read(buf)
