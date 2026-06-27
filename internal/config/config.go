@@ -97,6 +97,14 @@ func ParseFlags(argv []string, printUsageFn func(), versionFn func()) provider.O
 				os.Exit(1)
 			}
 			opts.Provider = v
+		case arg == "--vercel-project" || arg == "-vercel-project":
+			opts.VercelProject = next()
+		case strings.HasPrefix(arg, "--vercel-project="):
+			opts.VercelProject = strings.TrimPrefix(arg, "--vercel-project=")
+		case arg == "--github-repo" || arg == "-github-repo":
+			opts.GitHubRepo = next()
+		case strings.HasPrefix(arg, "--github-repo="):
+			opts.GitHubRepo = strings.TrimPrefix(arg, "--github-repo=")
 		case arg == "--version" || arg == "-version":
 			if versionFn != nil {
 				versionFn()
