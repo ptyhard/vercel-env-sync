@@ -369,8 +369,10 @@ func (cfg *AppConfig) ResolveVercelTargets(selectName string) ([]VercelTarget, e
 		}, nil
 	}
 
-	// name の必須チェックと重複チェック（selectName の有無によらず常に実施）
-	if err := validateVercelProjectNames(cfg.Vercel.Projects); err != nil {
+	// name・project_id の必須チェックと重複チェック（selectName の有無によらず常に実施）。
+	// projects が定義されている場合は .vercel/project.json フォールバックを行わないため
+	// 各エントリの project_id が必須となる（絞り込み後の件数に関わらず全エントリを検証する）。
+	if err := validateVercelProjectConfs(cfg.Vercel.Projects); err != nil {
 		return nil, err
 	}
 
@@ -393,8 +395,10 @@ func (cfg *AppConfig) ResolveVercelTargets(selectName string) ([]VercelTarget, e
 	return targets, nil
 }
 
-// validateVercelProjectNames は vercel.projects の name 必須チェックと重複チェックを行う。
-func validateVercelProjectNames(projects []VercelProjectConf) error {
+// validateVercelProjectConfs は vercel.projects の name 必須・重複チェックおよび
+// project_id 必須チェックを行う。projects が定義されている場合は .vercel/project.json
+// フォールバックを使わないため、絞り込み後の件数に関わらず全エントリの project_id が必須。
+func validateVercelProjectConfs(projects []VercelProjectConf) error {
 	seen := make(map[string]bool, len(projects))
 	for _, p := range projects {
 		if p.Name == "" {
@@ -404,6 +408,9 @@ func validateVercelProjectNames(projects []VercelProjectConf) error {
 			return fmt.Errorf("vercel.projects の name %q が重複しています", p.Name)
 		}
 		seen[p.Name] = true
+		if p.ProjectID == "" {
+			return fmt.Errorf("vercel.projects のエントリ %q には project_id が必須です", p.Name)
+		}
 	}
 	return nil
 }
@@ -428,8 +435,10 @@ func (cfg *AppConfig) ResolveGitHubTargets(selectName string) ([]GitHubTarget, e
 		}, nil
 	}
 
-	// name の必須チェックと重複チェック（selectName の有無によらず常に実施）
-	if err := validateGitHubRepoNames(cfg.GitHub.Repos); err != nil {
+	// name・repo の必須チェックと重複チェック（selectName の有無によらず常に実施）。
+	// repos が定義されている場合は git remote / 環境変数フォールバックを行わないため
+	// 各エントリの repo が必須となる（絞り込み後の件数に関わらず全エントリを検証する）。
+	if err := validateGitHubRepoConfs(cfg.GitHub.Repos); err != nil {
 		return nil, err
 	}
 
@@ -451,8 +460,10 @@ func (cfg *AppConfig) ResolveGitHubTargets(selectName string) ([]GitHubTarget, e
 	return targets, nil
 }
 
-// validateGitHubRepoNames は github.repos の name 必須チェックと重複チェックを行う。
-func validateGitHubRepoNames(repos []GitHubRepoConf) error {
+// validateGitHubRepoConfs は github.repos の name 必須・重複チェックおよび
+// repo 必須チェックを行う。repos が定義されている場合は git remote フォールバックを使わないため
+// 絞り込み後の件数に関わらず全エントリの repo が必須。
+func validateGitHubRepoConfs(repos []GitHubRepoConf) error {
 	seen := make(map[string]bool, len(repos))
 	for _, r := range repos {
 		if r.Name == "" {
@@ -462,6 +473,9 @@ func validateGitHubRepoNames(repos []GitHubRepoConf) error {
 			return fmt.Errorf("github.repos の name %q が重複しています", r.Name)
 		}
 		seen[r.Name] = true
+		if r.Repo == "" {
+			return fmt.Errorf("github.repos のエントリ %q には repo が必須です", r.Name)
+		}
 	}
 	return nil
 }

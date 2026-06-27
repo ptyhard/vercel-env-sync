@@ -80,15 +80,6 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 			return fmt.Errorf("VERCEL_PROJECT_ID が未設定で .vercel/project.json もありません（先に vercel link するか指定してください）")
 		}
 	}
-	// 複数ターゲット時は各 project_id が必須（.vercel/project.json フォールバックなし）
-	if len(targets) > 1 {
-		for _, tgt := range targets {
-			if tgt.ProjectID == "" {
-				return fmt.Errorf("Vercel プロジェクト %q の project_id が設定されていません", tgt.Name)
-			}
-		}
-	}
-
 	// ---- 各ターゲットに対して一覧表示と分類（dry-run も同様）----
 	// perTargetClassified はターゲット順に分類結果を保持し、確認・送信フェーズで再利用する。
 	// tokenMissing はトークン未設定のターゲットインデックスを記録する（複数ターゲット時の失敗集約用）。
@@ -163,21 +154,33 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	// ---- 確認（更新がある場合、または分類不可の場合）----
 	// 一覧表示フェーズで計算した分類結果（perTargetClassified）を再利用し API 二重呼び出しを避ける。
 	// 複数ターゲット時は常に確認（安全側）。単一ターゲット時は更新有無で判定。
+	// tokenMissing のターゲットはスキップ済みのため送信対象件数から除外する。
+	activeCount := 0
+	for _, m := range tokenMissing {
+		if !m {
+			activeCount++
+		}
+	}
 	needsConfirm := false
-	if len(targets) > 1 {
+	if activeCount > 1 {
 		needsConfirm = true
-	} else {
-		// 単一ターゲット: 保存済み分類を再利用
-		classified := perTargetClassified[0]
-		_, updateCount := countClassified(classified, len(items))
-		needsConfirm = classified == nil || updateCount > 0
+	} else if activeCount == 1 {
+		// 送信可能な単一ターゲット: 保存済み分類を再利用
+		for i, m := range tokenMissing {
+			if !m {
+				classified := perTargetClassified[i]
+				_, updateCount := countClassified(classified, len(items))
+				needsConfirm = classified == nil || updateCount > 0
+				break
+			}
+		}
 	}
 	if needsConfirm && !opts.Yes {
 		if !config.IsTTY(os.Stdin) {
 			return fmt.Errorf("対話できない環境です。確認をスキップするには --yes を付けてください")
 		}
-		if len(targets) > 1 {
-			fmt.Printf("上記を Vercel の %d プロジェクトに登録します（既存は上書き）。続行しますか? (y/N) ", len(targets))
+		if activeCount > 1 {
+			fmt.Printf("上記を Vercel の %d プロジェクトに登録します（既存は上書き）。続行しますか? (y/N) ", activeCount)
 		} else {
 			fmt.Print("上記を Vercel に登録します（既存は上書き）。続行しますか? (y/N) ")
 		}
@@ -203,7 +206,7 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		if tgt.Name != "" {
 			targetLabel = tgt.Name
 		}
-		if len(targets) > 1 {
+		if activeCount > 1 {
 			fmt.Printf("\n--- プロジェクト: %s ---\n", targetLabel)
 		}
 		ok, ng := syncOneVercelTarget(client, tgt.Token, tgt.ProjectID, tgt.TeamID, items)
@@ -211,7 +214,7 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		totalNG += ng
 	}
 
-	if len(targets) > 1 {
+	if activeCount > 1 {
 		fmt.Printf("\n全体完了: 成功 %d / 失敗 %d\n", totalOK, totalNG)
 	} else {
 		fmt.Printf("\n完了: 成功 %d / 失敗 %d\n", totalOK, totalNG)

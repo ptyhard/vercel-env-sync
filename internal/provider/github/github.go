@@ -130,15 +130,6 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		return err
 	}
 
-	// 複数 repos 定義時は各 target の repo が必須（git remote フォールバックなし）
-	if len(targets) > 1 {
-		for _, tgt := range targets {
-			if tgt.Repo == "" {
-				return fmt.Errorf("GitHub リポジトリ %q の repo が設定されていません", tgt.Name)
-			}
-		}
-	}
-
 	// ---- 登録対象を展開 ----
 	tasks := expandGitHubTasks(entries)
 
@@ -227,22 +218,33 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 
 	// ---- 確認（更新がある場合、または分類不可の場合）----
 	// 一覧表示フェーズで計算した分類結果（resolved[].classified）を再利用し API 二重呼び出しを避ける。
+	// skipped のターゲットはスキップ済みのため送信対象件数から除外する。
 	// 複数ターゲット時は常に確認（安全側）。単一ターゲット時は更新有無で判定。
+	activeResolved := 0
+	for _, r := range resolved {
+		if !r.skipped {
+			activeResolved++
+		}
+	}
 	needsConfirm := false
-	if len(resolved) > 1 {
+	if activeResolved > 1 {
 		needsConfirm = true
-	} else {
-		// 単一ターゲット: 保存済み分類を再利用
-		classified := resolved[0].classified
-		_, updateCount := countGitHubClassified(classified, len(tasks))
-		needsConfirm = classified == nil || updateCount > 0
+	} else if activeResolved == 1 {
+		// 送信可能な単一ターゲット: 保存済み分類を再利用
+		for _, r := range resolved {
+			if !r.skipped {
+				_, updateCount := countGitHubClassified(r.classified, len(tasks))
+				needsConfirm = r.classified == nil || updateCount > 0
+				break
+			}
+		}
 	}
 	if needsConfirm && !opts.Yes {
 		if !config.IsTTY(os.Stdin) {
 			return fmt.Errorf("対話できない環境です。確認をスキップするには --yes を付けてください")
 		}
-		if len(resolved) > 1 {
-			fmt.Printf("上記を GitHub の %d リポジトリに登録します（既存は上書き）。続行しますか? (y/N) ", len(resolved))
+		if activeResolved > 1 {
+			fmt.Printf("上記を GitHub の %d リポジトリに登録します（既存は上書き）。続行しますか? (y/N) ", activeResolved)
 		} else {
 			fmt.Print("上記を GitHub に登録します。続行しますか? (y/N) ")
 		}
@@ -264,7 +266,7 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 			totalNG += len(tasks)
 			continue
 		}
-		if len(resolved) > 1 {
+		if activeResolved > 1 {
 			fmt.Printf("\n--- リポジトリ: %s/%s ---\n", r.owner, r.repo)
 		}
 		ok, ng := syncOneGitHubTarget(client, r.token, r.owner, r.repo, tasks, r.classified)
@@ -272,7 +274,7 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		totalNG += ng
 	}
 
-	if len(resolved) > 1 {
+	if activeResolved > 1 {
 		fmt.Printf("\n全体完了: 成功 %d / 失敗 %d\n", totalOK, totalNG)
 	} else {
 		fmt.Printf("\n完了: 成功 %d / 失敗 %d\n", totalOK, totalNG)

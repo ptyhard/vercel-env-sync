@@ -1080,3 +1080,77 @@ func TestResolveGitHubTargets_EmptyName_Error(t *testing.T) {
 		t.Errorf("エラーメッセージに name が含まれることを期待: %v", err)
 	}
 }
+
+func TestResolveVercelTargets_EmptyProjectID_Error(t *testing.T) {
+	// projects に project_id が空のエントリがあるとエラー（絞り込み前に全エントリを検証）
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Projects = []config.VercelProjectConf{
+		{Name: "app-a", ProjectID: "pid-a"},
+		{Name: "app-b", ProjectID: ""}, // project_id 空
+	}
+	_, err := cfg.ResolveVercelTargets("")
+	if err == nil {
+		t.Fatal("project_id が空のエントリでエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "project_id") {
+		t.Errorf("エラーメッセージに project_id が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveVercelTargets_EmptyProjectID_SelectName_Error(t *testing.T) {
+	// --vercel-project で 1 件に絞り込んでも、project_id 空エントリは絞り込み前に検証される
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Projects = []config.VercelProjectConf{
+		{Name: "app-a", ProjectID: "pid-a"},
+		{Name: "app-b", ProjectID: ""}, // project_id 空（絞り込み対象外でもエラー）
+	}
+	_, err := cfg.ResolveVercelTargets("app-a") // app-b を除外しても検証でエラー
+	if err == nil {
+		t.Fatal("他エントリの project_id が空の場合もエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "project_id") {
+		t.Errorf("エラーメッセージに project_id が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveGitHubTargets_EmptyRepo_Error(t *testing.T) {
+	// repos に repo が空のエントリがあるとエラー（絞り込み前に全エントリを検証）
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Repos = []config.GitHubRepoConf{
+		{Name: "frontend", Repo: "org/frontend"},
+		{Name: "backend", Repo: ""}, // repo 空
+	}
+	_, err := cfg.ResolveGitHubTargets("")
+	if err == nil {
+		t.Fatal("repo が空のエントリでエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "repo") {
+		t.Errorf("エラーメッセージに repo が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveGitHubTargets_EmptyRepo_SelectName_Error(t *testing.T) {
+	// --github-repo で 1 件に絞り込んでも、repo 空エントリは絞り込み前に検証される
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Repos = []config.GitHubRepoConf{
+		{Name: "frontend", Repo: "org/frontend"},
+		{Name: "backend", Repo: ""}, // repo 空（絞り込み対象外でもエラー）
+	}
+	_, err := cfg.ResolveGitHubTargets("frontend") // backend を除外しても検証でエラー
+	if err == nil {
+		t.Fatal("他エントリの repo が空の場合もエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "repo") {
+		t.Errorf("エラーメッセージに repo が含まれることを期待: %v", err)
+	}
+}
