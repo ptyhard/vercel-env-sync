@@ -224,6 +224,49 @@ github:
   repo:  <owner/repo 形式のリポジトリ名>
 ```
 
+### 複数 Vercel プロジェクト / 複数 GitHub リポジトリ（モノレポ）
+
+turborepo などのモノレポで 1 リポジトリに複数アプリがある場合、`vercel.projects` / `github.repos` の配列で複数の同期先を定義できます。1 回の実行で定義済みの全ターゲットへ環境変数を配れます。
+
+```yaml
+vercel:
+  token: <共通トークン>            # 各プロジェクトで token 省略時のフォールバック
+  team_id: team_xxxxxxxx          # 各プロジェクトで team_id 省略時のフォールバック
+  projects:
+    - name: web                   # --vercel-project で絞り込む際の識別名
+      project_id: prj_web
+    - name: admin
+      project_id: prj_admin
+      team_id: team_yyyyyyyy      # このプロジェクトだけ別チーム
+      token: ${ADMIN_VERCEL_TOKEN} # このプロジェクトだけ別トークン
+
+github:
+  token: <共通トークン>            # 各リポジトリで token 省略時のフォールバック
+  repos:
+    - name: web
+      repo: myorg/web
+    - name: infra
+      repo: myorg/infra
+      token: ${INFRA_GH_TOKEN}    # このリポジトリだけ別トークン
+```
+
+- 各ターゲットの `token` / `team_id` を省略すると、トップレベルの `vercel.token` / `vercel.team_id` / `github.token`（さらに環境変数）にフォールバックします。
+- `token` などには `${VAR}` / `${VAR:-default}` 参照も使えます。
+- **複数定義時は各ターゲットの `project_id` / `repo` が必須**です（`.vercel/project.json` / git remote フォールバックは単一定義時のみ有効）。
+
+```bash
+# 定義済みの全 Vercel プロジェクトへ同期
+env-sync --env .env.production
+
+# 特定のプロジェクト / リポジトリだけに絞り込む
+env-sync --env .env.production --vercel-project admin
+env-sync --provider github --env .env.production --github-repo infra
+```
+
+実行時は各ターゲットごとに「対象プロジェクト / 対象リポジトリ」見出しと新規/更新の分類一覧が表示されます。あるターゲットで失敗しても残りのターゲットは継続して試行し、いずれかで失敗があれば終了コード 1 で終わります。
+
+> **後方互換**: `projects` / `repos` を定義しない場合は、従来どおり単一の `vercel.project_id` / `github.repo`（および環境変数・`.vercel/project.json` / git remote フォールバック）で 1 ターゲットへ同期します。
+
 ### 使用例
 
 ```bash
@@ -319,6 +362,8 @@ variables:
 | 項目 | 必須 | 説明 |
 |------|------|------|
 | `--provider <name>` | – | 同期先（デフォルト `vercel`）。現在 `vercel` / `github` が利用可 |
+| `--vercel-project <name>` | – | 同期対象を config の `vercel.projects[].name` 1 件に絞る。未指定なら定義済み全プロジェクト |
+| `--github-repo <name>` | – | 同期対象を config の `github.repos[].name` 1 件に絞る。未指定なら定義済み全リポジトリ |
 | `--env <file>` | – | 値を読む env ファイル（デフォルト `.env`） |
 | `--def <file>` | – | 定義 YAML（デフォルト `env-sync.yaml`） |
 | `--dry-run` | – | 送信せず新規/更新の区別を含む登録予定一覧を表示 |

@@ -518,3 +518,639 @@ vercel:
 		t.Fatal("空変数名参照に対してエラーを期待したが nil")
 	}
 }
+
+// --- モノレポ対応: projects / repos のロード・マージ・解決テスト ---
+
+func TestLoadAppConfig_VercelProjects_Load(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "no-global"))
+	chdirCleanup(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, ".env-sync.config.yaml"), []byte(`
+vercel:
+  token: global-token
+  team_id: global-team
+  projects:
+    - name: app-a
+      project_id: pid-a
+    - name: app-b
+      project_id: pid-b
+      token: per-b-token
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if len(cfg.Vercel.Projects) != 2 {
+		t.Fatalf("Projects len = %d, want 2", len(cfg.Vercel.Projects))
+	}
+	if cfg.Vercel.Projects[0].Name != "app-a" {
+		t.Errorf("Projects[0].Name = %q, want app-a", cfg.Vercel.Projects[0].Name)
+	}
+	if cfg.Vercel.Projects[1].Token != "per-b-token" {
+		t.Errorf("Projects[1].Token = %q, want per-b-token", cfg.Vercel.Projects[1].Token)
+	}
+}
+
+func TestLoadAppConfig_GitHubRepos_Load(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "no-global"))
+	chdirCleanup(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, ".env-sync.config.yaml"), []byte(`
+github:
+  token: global-gh-token
+  repos:
+    - name: frontend
+      repo: org/frontend
+    - name: backend
+      repo: org/backend
+      token: per-backend-token
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if len(cfg.GitHub.Repos) != 2 {
+		t.Fatalf("Repos len = %d, want 2", len(cfg.GitHub.Repos))
+	}
+	if cfg.GitHub.Repos[0].Repo != "org/frontend" {
+		t.Errorf("Repos[0].Repo = %q, want org/frontend", cfg.GitHub.Repos[0].Repo)
+	}
+	if cfg.GitHub.Repos[1].Token != "per-backend-token" {
+		t.Errorf("Repos[1].Token = %q, want per-backend-token", cfg.GitHub.Repos[1].Token)
+	}
+}
+
+func TestLoadAppConfig_VercelProjects_MergeReplace(t *testing.T) {
+	// global に projects があり、project にも projects がある場合は project 側が置き換える
+	dir := t.TempDir()
+	globalDir := filepath.Join(dir, "env-sync")
+	if err := os.MkdirAll(globalDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(`
+vercel:
+  projects:
+    - name: global-app
+      project_id: global-pid
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	projectDir := t.TempDir()
+	chdirCleanup(t, projectDir)
+	if err := os.WriteFile(filepath.Join(projectDir, ".env-sync.config.yaml"), []byte(`
+vercel:
+  projects:
+    - name: project-app
+      project_id: project-pid
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	// project 側の projects が global を置き換える
+	if len(cfg.Vercel.Projects) != 1 {
+		t.Fatalf("Projects len = %d, want 1 (project side should replace global)", len(cfg.Vercel.Projects))
+	}
+	if cfg.Vercel.Projects[0].Name != "project-app" {
+		t.Errorf("Projects[0].Name = %q, want project-app", cfg.Vercel.Projects[0].Name)
+	}
+}
+
+func TestLoadAppConfig_VercelProjects_MergeGlobalWhenProjectEmpty(t *testing.T) {
+	// project 側 projects が空なら global を残す
+	dir := t.TempDir()
+	globalDir := filepath.Join(dir, "env-sync")
+	if err := os.MkdirAll(globalDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalDir, "config.yaml"), []byte(`
+vercel:
+  projects:
+    - name: global-app
+      project_id: global-pid
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	projectDir := t.TempDir()
+	chdirCleanup(t, projectDir)
+	// project config には projects を書かない
+	if err := os.WriteFile(filepath.Join(projectDir, ".env-sync.config.yaml"), []byte(`
+vercel:
+  token: project-token
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	// project 側 projects が空なので global の projects が残る
+	if len(cfg.Vercel.Projects) != 1 {
+		t.Fatalf("Projects len = %d, want 1 (global projects should remain)", len(cfg.Vercel.Projects))
+	}
+	if cfg.Vercel.Projects[0].Name != "global-app" {
+		t.Errorf("Projects[0].Name = %q, want global-app", cfg.Vercel.Projects[0].Name)
+	}
+}
+
+func TestResolveVercelTargets_AllProjects(t *testing.T) {
+	// projects が定義されている場合、全件を VercelTarget として返す
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Token = "top-token"
+	cfg.Vercel.TeamID = "top-team"
+	cfg.Vercel.Projects = []config.VercelProjectConf{
+		{Name: "app-a", ProjectID: "pid-a"},
+		{Name: "app-b", ProjectID: "pid-b", Token: "per-b-token", TeamID: "per-b-team"},
+	}
+	targets, err := cfg.ResolveVercelTargets("")
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("targets len = %d, want 2", len(targets))
+	}
+	// app-a: token は top-level フォールバック
+	if targets[0].Token != "top-token" {
+		t.Errorf("targets[0].Token = %q, want top-token (top-level fallback)", targets[0].Token)
+	}
+	if targets[0].TeamID != "top-team" {
+		t.Errorf("targets[0].TeamID = %q, want top-team (top-level fallback)", targets[0].TeamID)
+	}
+	// app-b: per-target token/team_id が優先
+	if targets[1].Token != "per-b-token" {
+		t.Errorf("targets[1].Token = %q, want per-b-token", targets[1].Token)
+	}
+	if targets[1].TeamID != "per-b-team" {
+		t.Errorf("targets[1].TeamID = %q, want per-b-team", targets[1].TeamID)
+	}
+}
+
+func TestResolveVercelTargets_SelectByName(t *testing.T) {
+	// --vercel-project 指定で 1 件のみ返す
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Token = "top-token"
+	cfg.Vercel.Projects = []config.VercelProjectConf{
+		{Name: "app-a", ProjectID: "pid-a"},
+		{Name: "app-b", ProjectID: "pid-b"},
+	}
+	targets, err := cfg.ResolveVercelTargets("app-b")
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("targets len = %d, want 1", len(targets))
+	}
+	if targets[0].Name != "app-b" {
+		t.Errorf("targets[0].Name = %q, want app-b", targets[0].Name)
+	}
+	if targets[0].ProjectID != "pid-b" {
+		t.Errorf("targets[0].ProjectID = %q, want pid-b", targets[0].ProjectID)
+	}
+}
+
+func TestResolveVercelTargets_SelectByName_NotFound(t *testing.T) {
+	// 一致しない name を指定した場合はエラー
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Projects = []config.VercelProjectConf{
+		{Name: "app-a", ProjectID: "pid-a"},
+	}
+	_, err := cfg.ResolveVercelTargets("app-z")
+	if err == nil {
+		t.Fatal("存在しない name に対してエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "app-z") {
+		t.Errorf("エラーメッセージに指定名が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveVercelTargets_NoProjects_BackwardCompat(t *testing.T) {
+	// projects が未定義の場合は単一解決で 1 件返す（後方互換）
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "env-pid")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Token = "top-token"
+	cfg.Vercel.ProjectID = "config-pid"
+	targets, err := cfg.ResolveVercelTargets("")
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("targets len = %d, want 1 (後方互換)", len(targets))
+	}
+	// 環境変数 VERCEL_PROJECT_ID が優先
+	if targets[0].ProjectID != "env-pid" {
+		t.Errorf("targets[0].ProjectID = %q, want env-pid (env var should win)", targets[0].ProjectID)
+	}
+	if targets[0].Token != "top-token" {
+		t.Errorf("targets[0].Token = %q, want top-token", targets[0].Token)
+	}
+}
+
+func TestResolveVercelTargets_NoProjects_EmptyProjectID(t *testing.T) {
+	// projects 未定義かつ project_id も空の場合は空 ProjectID の 1 件を返す（provider 側でフォールバック）
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Token = "top-token"
+	targets, err := cfg.ResolveVercelTargets("")
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("targets len = %d, want 1", len(targets))
+	}
+	if targets[0].ProjectID != "" {
+		t.Errorf("targets[0].ProjectID = %q, want empty (provider 側でフォールバック)", targets[0].ProjectID)
+	}
+}
+
+func TestResolveVercelTargets_EnvVarToken_Fallback(t *testing.T) {
+	// per-target token が空でも VERCEL_TOKEN 環境変数にフォールバック
+	t.Setenv("VERCEL_TOKEN", "env-token")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	// top-level token は空（環境変数で取得）
+	cfg.Vercel.Projects = []config.VercelProjectConf{
+		{Name: "app-a", ProjectID: "pid-a"}, // per-target token 空
+	}
+	targets, err := cfg.ResolveVercelTargets("")
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if targets[0].Token != "env-token" {
+		t.Errorf("targets[0].Token = %q, want env-token (VERCEL_TOKEN fallback)", targets[0].Token)
+	}
+}
+
+func TestResolveGitHubTargets_AllRepos(t *testing.T) {
+	// repos が定義されている場合、全件を GitHubTarget として返す
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Token = "top-gh-token"
+	cfg.GitHub.Repos = []config.GitHubRepoConf{
+		{Name: "frontend", Repo: "org/frontend"},
+		{Name: "backend", Repo: "org/backend", Token: "per-backend-token"},
+	}
+	targets, err := cfg.ResolveGitHubTargets("")
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("targets len = %d, want 2", len(targets))
+	}
+	// frontend: top-level token フォールバック
+	if targets[0].Token != "top-gh-token" {
+		t.Errorf("targets[0].Token = %q, want top-gh-token", targets[0].Token)
+	}
+	// backend: per-target token が優先
+	if targets[1].Token != "per-backend-token" {
+		t.Errorf("targets[1].Token = %q, want per-backend-token", targets[1].Token)
+	}
+}
+
+func TestResolveGitHubTargets_SelectByName(t *testing.T) {
+	// --github-repo 指定で 1 件のみ返す
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Token = "top-token"
+	cfg.GitHub.Repos = []config.GitHubRepoConf{
+		{Name: "frontend", Repo: "org/frontend"},
+		{Name: "backend", Repo: "org/backend"},
+	}
+	targets, err := cfg.ResolveGitHubTargets("backend")
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("targets len = %d, want 1", len(targets))
+	}
+	if targets[0].Name != "backend" {
+		t.Errorf("targets[0].Name = %q, want backend", targets[0].Name)
+	}
+	if targets[0].Repo != "org/backend" {
+		t.Errorf("targets[0].Repo = %q, want org/backend", targets[0].Repo)
+	}
+}
+
+func TestResolveGitHubTargets_SelectByName_NotFound(t *testing.T) {
+	// 一致しない name を指定した場合はエラー
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Repos = []config.GitHubRepoConf{
+		{Name: "frontend", Repo: "org/frontend"},
+	}
+	_, err := cfg.ResolveGitHubTargets("nonexistent")
+	if err == nil {
+		t.Fatal("存在しない name に対してエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("エラーメッセージに指定名が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveGitHubTargets_NoRepos_BackwardCompat(t *testing.T) {
+	// repos が未定義の場合は単一解決で 1 件返す（後方互換）
+	t.Setenv("GITHUB_TOKEN", "env-gh-token")
+	t.Setenv("GITHUB_REPO", "env/repo")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Token = "config-gh-token"
+	cfg.GitHub.Repo = "config/repo"
+	targets, err := cfg.ResolveGitHubTargets("")
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("targets len = %d, want 1 (後方互換)", len(targets))
+	}
+	// 環境変数が優先
+	if targets[0].Token != "env-gh-token" {
+		t.Errorf("targets[0].Token = %q, want env-gh-token", targets[0].Token)
+	}
+	if targets[0].Repo != "env/repo" {
+		t.Errorf("targets[0].Repo = %q, want env/repo", targets[0].Repo)
+	}
+}
+
+func TestResolveGitHubTargets_NoRepos_EmptyRepo(t *testing.T) {
+	// repos 未定義かつ repo も空の場合は空 Repo の 1 件を返す（provider 側でフォールバック）
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Token = "top-token"
+	targets, err := cfg.ResolveGitHubTargets("")
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("targets len = %d, want 1", len(targets))
+	}
+	if targets[0].Repo != "" {
+		t.Errorf("targets[0].Repo = %q, want empty (provider 側でフォールバック)", targets[0].Repo)
+	}
+}
+
+func TestResolveGitHubTargets_EnvVarToken_Fallback(t *testing.T) {
+	// per-target token が空でも GITHUB_TOKEN 環境変数にフォールバック
+	t.Setenv("GITHUB_TOKEN", "env-gh-token")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Repos = []config.GitHubRepoConf{
+		{Name: "frontend", Repo: "org/frontend"}, // per-target token 空
+	}
+	targets, err := cfg.ResolveGitHubTargets("")
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if targets[0].Token != "env-gh-token" {
+		t.Errorf("targets[0].Token = %q, want env-gh-token (GITHUB_TOKEN fallback)", targets[0].Token)
+	}
+}
+
+func TestLoadAppConfig_VercelProjects_EnvRefExpansion(t *testing.T) {
+	// per-target token に ${VAR} が書かれている場合、展開される
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "no-global"))
+	chdirCleanup(t, dir)
+	t.Setenv("APP_B_TOKEN", "expanded-token")
+	if err := os.WriteFile(filepath.Join(dir, ".env-sync.config.yaml"), []byte(`
+vercel:
+  token: global-token
+  projects:
+    - name: app-a
+      project_id: pid-a
+    - name: app-b
+      project_id: pid-b
+      token: ${APP_B_TOKEN}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		t.Fatalf("エラーなしを期待: %v", err)
+	}
+	if cfg.Vercel.Projects[1].Token != "expanded-token" {
+		t.Errorf("Projects[1].Token = %q, want expanded-token", cfg.Vercel.Projects[1].Token)
+	}
+}
+
+// --- Warning 1: selectName が後方互換パスで黙殺されないことの確認 ---
+
+func TestResolveVercelTargets_SelectName_ProjectsEmpty_Error(t *testing.T) {
+	// projects が未定義のとき --vercel-project を指定するとエラー
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	// Projects は空（未定義）
+	_, err := cfg.ResolveVercelTargets("app-a")
+	if err == nil {
+		t.Fatal("projects が未定義で --vercel-project 指定時はエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "vercel.projects") {
+		t.Errorf("エラーメッセージに vercel.projects が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveGitHubTargets_SelectName_ReposEmpty_Error(t *testing.T) {
+	// repos が未定義のとき --github-repo を指定するとエラー
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	// Repos は空（未定義）
+	_, err := cfg.ResolveGitHubTargets("frontend")
+	if err == nil {
+		t.Fatal("repos が未定義で --github-repo 指定時はエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "github.repos") {
+		t.Errorf("エラーメッセージに github.repos が含まれることを期待: %v", err)
+	}
+}
+
+// --- Warning 2: name 重複時のエラー ---
+
+func TestResolveVercelTargets_DuplicateName_Error(t *testing.T) {
+	// projects に同名 name が複数あるとエラー
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Projects = []config.VercelProjectConf{
+		{Name: "app-a", ProjectID: "pid-1"},
+		{Name: "app-a", ProjectID: "pid-2"}, // 重複
+	}
+	_, err := cfg.ResolveVercelTargets("")
+	if err == nil {
+		t.Fatal("name 重複時にエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "app-a") {
+		t.Errorf("エラーメッセージに重複名が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveVercelTargets_DuplicateName_WithSelect_Error(t *testing.T) {
+	// --vercel-project で指定した場合も重複チェックが行われる
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Projects = []config.VercelProjectConf{
+		{Name: "app-a", ProjectID: "pid-1"},
+		{Name: "app-a", ProjectID: "pid-2"},
+	}
+	_, err := cfg.ResolveVercelTargets("app-a")
+	if err == nil {
+		t.Fatal("name 重複時（selectName 指定）にエラーを期待したが nil")
+	}
+}
+
+func TestResolveGitHubTargets_DuplicateName_Error(t *testing.T) {
+	// repos に同名 name が複数あるとエラー
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Repos = []config.GitHubRepoConf{
+		{Name: "frontend", Repo: "org/frontend-1"},
+		{Name: "frontend", Repo: "org/frontend-2"}, // 重複
+	}
+	_, err := cfg.ResolveGitHubTargets("")
+	if err == nil {
+		t.Fatal("name 重複時にエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "frontend") {
+		t.Errorf("エラーメッセージに重複名が含まれることを期待: %v", err)
+	}
+}
+
+// --- Warning 3: name が空のエントリのエラー ---
+
+func TestResolveVercelTargets_EmptyName_Error(t *testing.T) {
+	// projects に name が空のエントリがあるとエラー
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Projects = []config.VercelProjectConf{
+		{Name: "", ProjectID: "pid-1"}, // name 空
+	}
+	_, err := cfg.ResolveVercelTargets("")
+	if err == nil {
+		t.Fatal("name が空のエントリでエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "name") {
+		t.Errorf("エラーメッセージに name が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveGitHubTargets_EmptyName_Error(t *testing.T) {
+	// repos に name が空のエントリがあるとエラー
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Repos = []config.GitHubRepoConf{
+		{Name: "", Repo: "org/repo"}, // name 空
+	}
+	_, err := cfg.ResolveGitHubTargets("")
+	if err == nil {
+		t.Fatal("name が空のエントリでエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "name") {
+		t.Errorf("エラーメッセージに name が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveVercelTargets_EmptyProjectID_Error(t *testing.T) {
+	// projects に project_id が空のエントリがあるとエラー（絞り込み前に全エントリを検証）
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Projects = []config.VercelProjectConf{
+		{Name: "app-a", ProjectID: "pid-a"},
+		{Name: "app-b", ProjectID: ""}, // project_id 空
+	}
+	_, err := cfg.ResolveVercelTargets("")
+	if err == nil {
+		t.Fatal("project_id が空のエントリでエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "project_id") {
+		t.Errorf("エラーメッセージに project_id が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveVercelTargets_EmptyProjectID_SelectName_Error(t *testing.T) {
+	// --vercel-project で 1 件に絞り込んでも、project_id 空エントリは絞り込み前に検証される
+	t.Setenv("VERCEL_TOKEN", "")
+	t.Setenv("VERCEL_PROJECT_ID", "")
+	t.Setenv("VERCEL_TEAM_ID", "")
+	cfg := &config.AppConfig{}
+	cfg.Vercel.Projects = []config.VercelProjectConf{
+		{Name: "app-a", ProjectID: "pid-a"},
+		{Name: "app-b", ProjectID: ""}, // project_id 空（絞り込み対象外でもエラー）
+	}
+	_, err := cfg.ResolveVercelTargets("app-a") // app-b を除外しても検証でエラー
+	if err == nil {
+		t.Fatal("他エントリの project_id が空の場合もエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "project_id") {
+		t.Errorf("エラーメッセージに project_id が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveGitHubTargets_EmptyRepo_Error(t *testing.T) {
+	// repos に repo が空のエントリがあるとエラー（絞り込み前に全エントリを検証）
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Repos = []config.GitHubRepoConf{
+		{Name: "frontend", Repo: "org/frontend"},
+		{Name: "backend", Repo: ""}, // repo 空
+	}
+	_, err := cfg.ResolveGitHubTargets("")
+	if err == nil {
+		t.Fatal("repo が空のエントリでエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "repo") {
+		t.Errorf("エラーメッセージに repo が含まれることを期待: %v", err)
+	}
+}
+
+func TestResolveGitHubTargets_EmptyRepo_SelectName_Error(t *testing.T) {
+	// --github-repo で 1 件に絞り込んでも、repo 空エントリは絞り込み前に検証される
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_REPO", "")
+	cfg := &config.AppConfig{}
+	cfg.GitHub.Repos = []config.GitHubRepoConf{
+		{Name: "frontend", Repo: "org/frontend"},
+		{Name: "backend", Repo: ""}, // repo 空（絞り込み対象外でもエラー）
+	}
+	_, err := cfg.ResolveGitHubTargets("frontend") // backend を除外しても検証でエラー
+	if err == nil {
+		t.Fatal("他エントリの repo が空の場合もエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "repo") {
+		t.Errorf("エラーメッセージに repo が含まれることを期待: %v", err)
+	}
+}

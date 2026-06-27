@@ -33,6 +33,12 @@
 #           secret: true のエントリのみ同期（false はスキップ）
 #           environments に値を設定すると、Secret に labels {"environment": "<env>"} が付与される
 #           ※ environments が複数の場合は "-" で連結（例: [production, staging] → "production-staging"）
+#
+#   ---- 複数 Vercel プロジェクト / 複数 GitHub リポジトリ（モノレポ） ----
+#           このファイルは「変数定義」用。複数の同期先（Vercel プロジェクト・GitHub リポジトリ）は
+#           認証 config 側（.env-sync.config.yaml / ~/.config/env-sync/config.yaml）の
+#           vercel.projects[] / github.repos[] で定義する。--vercel-project / --github-repo で絞り込める。
+#           詳細は README「複数 Vercel プロジェクト / 複数 GitHub リポジトリ（モノレポ）」を参照。
 
 defaults:
   secret: true

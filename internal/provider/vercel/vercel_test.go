@@ -3,7 +3,10 @@ package vercel
 import (
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ptyhard/env-sync/internal/provider"
@@ -185,5 +188,223 @@ func TestEntriesToVercelItems_ValidEnvironments(t *testing.T) {
 	}
 	if len(items[0].Target) != 3 {
 		t.Errorf("Target len = %d, want 3", len(items[0].Target))
+	}
+}
+
+// --- syncOneVercelTarget のテスト ---
+
+// withVercelAPIBase はテスト中だけ apiBase をテストサーバに差し替える。
+func withVercelAPIBase(t *testing.T, base string) {
+	t.Helper()
+	orig := apiBase
+	apiBase = base
+	t.Cleanup(func() { apiBase = orig })
+}
+
+// makeTestItems は テスト用に Entry スライスを item スライスへ変換するヘルパー。
+func makeTestItems(t *testing.T, entries []provider.Entry) []item {
+	t.Helper()
+	items, err := entriesToVercelItems(entries)
+	if err != nil {
+		t.Fatalf("entriesToVercelItems: %v", err)
+	}
+	return items
+}
+
+func TestSyncOneVercelTarget_SendsToCorrectURL(t *testing.T) {
+	var receivedPath string
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.WriteHeader(http.StatusCreated)
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	items := makeTestItems(t, []provider.Entry{
+		{Key: "FOO", Value: "bar", Secret: true, Environments: []string{"production"}},
+	})
+	ok, ng := syncOneVercelTarget(
+		&http.Client{},
+		"test-token",
+		"my-project-id",
+		"", // teamID
+		items,
+	)
+	if ok != 1 || ng != 0 {
+		t.Errorf("ok=%d ng=%d, want ok=1 ng=0", ok, ng)
+	}
+	if receivedPath != "/v10/projects/my-project-id/env" {
+		t.Errorf("path = %q, want /v10/projects/my-project-id/env", receivedPath)
+	}
+}
+
+func TestSyncOneVercelTarget_MultipleProjects(t *testing.T) {
+	// 2 つのプロジェクトに送信されることを確認
+	var receivedPaths []string
+	mu := &struct{ sync.Mutex }{}
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			mu.Lock()
+			receivedPaths = append(receivedPaths, r.URL.Path)
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+		} else {
+			// GET（既存 key 取得）には空レスポンスを返す
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"envs": []interface{}{}})
+		}
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	items := makeTestItems(t, []provider.Entry{
+		{Key: "FOO", Value: "bar", Secret: true, Environments: []string{"production"}},
+	})
+
+	// プロジェクト 1 への同期
+	ok1, ng1 := syncOneVercelTarget(&http.Client{}, "token1", "pid-1", "", items)
+	// プロジェクト 2 への同期
+	ok2, ng2 := syncOneVercelTarget(&http.Client{}, "token2", "pid-2", "", items)
+
+	if ok1 != 1 || ng1 != 0 {
+		t.Errorf("pid-1: ok=%d ng=%d, want ok=1 ng=0", ok1, ng1)
+	}
+	if ok2 != 1 || ng2 != 0 {
+		t.Errorf("pid-2: ok=%d ng=%d, want ok=1 ng=0", ok2, ng2)
+	}
+	// 2 つの異なるプロジェクト ID への POST が飛んでいること
+	if len(receivedPaths) != 2 {
+		t.Errorf("receivedPaths len = %d, want 2", len(receivedPaths))
+	}
+}
+
+func TestSyncOneVercelTarget_TeamIDInQuery(t *testing.T) {
+	var receivedQuery string
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			receivedQuery = r.URL.RawQuery
+			w.WriteHeader(http.StatusCreated)
+		}
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	items := makeTestItems(t, []provider.Entry{
+		{Key: "FOO", Value: "bar", Secret: true, Environments: []string{"production"}},
+	})
+	syncOneVercelTarget(&http.Client{}, "token", "pid", "my-team-id", items)
+	if !strings.Contains(receivedQuery, "teamId=my-team-id") {
+		t.Errorf("query = %q, want teamId=my-team-id を含む", receivedQuery)
+	}
+}
+
+func TestSyncOneVercelTarget_PartialFailure_ContinuesAndCounts(t *testing.T) {
+	// 1 件目の送信が 500 でも 2 件目は送信され、失敗が集計されること。
+	// 個別変数の送信失敗はループ内で継続する設計（os.Exit は呼ばない）の検証。
+	var postCount int
+	mu := &struct{ sync.Mutex }{}
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			return
+		}
+		mu.Lock()
+		postCount++
+		n := postCount
+		mu.Unlock()
+		// 1 件目だけ失敗させる
+		if n == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"boom"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	items := makeTestItems(t, []provider.Entry{
+		{Key: "FAIL_KEY", Value: "v1", Secret: true, Environments: []string{"production"}},
+		{Key: "OK_KEY", Value: "v2", Secret: true, Environments: []string{"production"}},
+	})
+	ok, ng := syncOneVercelTarget(&http.Client{}, "token", "pid", "", items)
+	if ok != 1 || ng != 1 {
+		t.Errorf("ok=%d ng=%d, want ok=1 ng=1（1 件失敗しても残りを送信し集計する）", ok, ng)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if postCount != 2 {
+		t.Errorf("POST 回数 = %d, want 2（1 件目失敗後も 2 件目を送信する）", postCount)
+	}
+}
+
+func TestSyncOneVercelTarget_FailingTargetDoesNotBlockNext(t *testing.T) {
+	// 1 つ目のターゲットが全失敗（500）でも、2 つ目のターゲットへ POST が飛ぶこと。
+	// Sync が複数ターゲットを順に処理する設計の最小検証（os.Exit を含む Sync 自体は範囲外）。
+	var pid1Posts, pid2Posts int
+	mu := &struct{ sync.Mutex }{}
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			return
+		}
+		mu.Lock()
+		switch {
+		case strings.Contains(r.URL.Path, "/projects/pid-1/"):
+			pid1Posts++
+			mu.Unlock()
+			w.WriteHeader(http.StatusInternalServerError)
+		case strings.Contains(r.URL.Path, "/projects/pid-2/"):
+			pid2Posts++
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+		default:
+			mu.Unlock()
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	items := makeTestItems(t, []provider.Entry{
+		{Key: "FOO", Value: "bar", Secret: true, Environments: []string{"production"}},
+	})
+
+	ok1, ng1 := syncOneVercelTarget(&http.Client{}, "token1", "pid-1", "", items)
+	ok2, ng2 := syncOneVercelTarget(&http.Client{}, "token2", "pid-2", "", items)
+
+	if ok1 != 0 || ng1 != 1 {
+		t.Errorf("pid-1: ok=%d ng=%d, want ok=0 ng=1（全失敗）", ok1, ng1)
+	}
+	if ok2 != 1 || ng2 != 0 {
+		t.Errorf("pid-2: ok=%d ng=%d, want ok=1 ng=0（前ターゲット失敗に影響されず成功）", ok2, ng2)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if pid2Posts != 1 {
+		t.Errorf("pid-2 への POST 回数 = %d, want 1（前ターゲットの失敗で中断されない）", pid2Posts)
+	}
+}
+
+// newVercelTestServer は Vercel テスト用 HTTP サーバを立てる。
+func newVercelTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// classifyVercelItems のテスト（分類結果の再利用確認のため）
+
+func TestClassifyVercelItems_NewAndUpdate(t *testing.T) {
+	items := []item{
+		{Key: "NEW_KEY", Value: "v1", Type: "sensitive", Target: []string{"production"}},
+		{Key: "EXISTING_KEY", Value: "v2", Type: "plain", Target: []string{"production"}},
+	}
+	existing := map[string]bool{
+		"EXISTING_KEY": true,
+	}
+	classified := classifyVercelItems(items, existing)
+	if len(classified) != 2 {
+		t.Fatalf("classified len = %d, want 2", len(classified))
+	}
+	if !classified[0].isNew {
+		t.Error("classified[0].isNew = false, want true (NEW_KEY は新規)")
+	}
+	if classified[1].isNew {
+		t.Error("classified[1].isNew = true, want false (EXISTING_KEY は更新)")
 	}
 }

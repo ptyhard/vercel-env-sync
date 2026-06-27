@@ -114,18 +114,18 @@ func countGitHubClassified(classified []githubClassifiedTask, total int) (newCou
 }
 
 // Sync は GitHub Actions への環境変数/シークレット同期を行う。
+// github.repos が設定されている場合は複数リポジトリへ順に同期する。
 func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) error {
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		return err
 	}
-	token := appCfg.ResolveGitHubToken()
-	if !opts.DryRun && token == "" {
+	if !opts.DryRun && appCfg.ResolveGitHubToken() == "" && len(appCfg.GitHub.Repos) == 0 {
 		return fmt.Errorf("GITHUB_TOKEN が未設定です（環境変数 GITHUB_TOKEN または config ファイルの github.token で指定してください）")
 	}
 
-	// ---- リポジトリ解決 ----
-	owner, repo, err := resolveGitHubRepo(appCfg)
+	// ---- ターゲット解決 ----
+	targets, err := appCfg.ResolveGitHubTargets(opts.GitHubRepo)
 	if err != nil {
 		return err
 	}
@@ -133,49 +133,79 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	// ---- 登録対象を展開 ----
 	tasks := expandGitHubTasks(entries)
 
-	// ---- 既存確認して新規/更新を分類 ----
-	// ネットワーク不調時に無期限ブロックしないようタイムアウトを設定する。
 	client := &http.Client{Timeout: httpTimeout}
-	var classified []githubClassifiedTask
-	if token != "" {
-		cls, err := classifyGitHubTasks(client, token, owner, repo, tasks)
-		if err == nil {
-			classified = cls
-		} else {
-			// API 失敗時は classified = nil のまま（安全側フォールバック）。
-			// トークン権限不足やレート制限などの原因が分かるよう警告を出す。
-			fmt.Fprintf(os.Stderr, "警告: 既存の存在確認に失敗したため新規/更新の分類をスキップします: %s\n", err)
-		}
-	}
 
-	// ---- 一覧表示 ----
-	fmt.Printf("対象リポジトリ: %s/%s\n", owner, repo)
-	newCount, updateCount := countGitHubClassified(classified, len(tasks))
-	if classified != nil {
-		fmt.Printf("登録対象 %d 件 (新規 %d 件 / 更新 %d 件):\n", len(tasks), newCount, updateCount)
-	} else {
-		fmt.Printf("登録対象 %d 件:\n", len(tasks))
+	// perTargetClassified はターゲット順に分類結果を保持し、確認・送信フェーズで再利用する。
+	// skipped が true のターゲットはトークン未設定のためスキップ済み（複数ターゲット時の失敗集約用）。
+	type resolvedTarget struct {
+		owner, repo string
+		token       string
+		classified  []githubClassifiedTask
+		skipped     bool // トークン未設定により送信をスキップするターゲット
 	}
-	for i, t := range tasks {
-		kind := "Secret"
-		if !t.entry.Secret {
-			kind = "Variable"
+	resolved := make([]resolvedTarget, 0, len(targets))
+
+	// ---- 各ターゲットについて一覧表示と分類（dry-run も同様）----
+	for _, tgt := range targets {
+		ownerStr, repoStr, resolveErr := resolveOwnerRepo(tgt, appCfg)
+		if resolveErr != nil {
+			return resolveErr
 		}
-		scope := t.envScope
-		if scope == "" {
-			scope = "repo"
-		}
-		if classified != nil {
-			marker, label := "⟳", "更新"
-			if classified[i].isNew {
-				marker, label = "+", "新規"
+
+		// per-target トークンを決定
+		// 単一ターゲット時は即エラー返却。複数ターゲット時は失敗として記録して残りを継続する。
+		targetToken := tgt.Token
+		if !opts.DryRun && targetToken == "" {
+			if len(targets) == 1 {
+				return fmt.Errorf("GITHUB_TOKEN が未設定です（リポジトリ %q: 環境変数 GITHUB_TOKEN または config ファイルの token で指定してください）", tgt.Name)
 			}
-			fmt.Printf("  %s %s (env: %s, %s) [%s]\n", marker, t.entry.Key, scope, kind, label)
-		} else {
-			fmt.Printf("  %s (env: %s, %s)\n", t.entry.Key, scope, kind)
+			fmt.Fprintf(os.Stderr, "✗ リポジトリ %q: GITHUB_TOKEN が未設定です（このターゲットをスキップして残りを継続します）\n", tgt.Name)
+			resolved = append(resolved, resolvedTarget{owner: ownerStr, repo: repoStr, skipped: true})
+			continue
 		}
+
+		// 既存確認して新規/更新を分類（結果を保存して後で再利用し、二重呼び出しを避ける）
+		var classified []githubClassifiedTask
+		if targetToken != "" {
+			cls, err := classifyGitHubTasks(client, targetToken, ownerStr, repoStr, tasks)
+			if err == nil {
+				classified = cls
+			} else {
+				// API 失敗時は classified = nil のまま（安全側フォールバック）。
+				fmt.Fprintf(os.Stderr, "警告: 既存の存在確認に失敗したため新規/更新の分類をスキップします: %s\n", err)
+			}
+		}
+		resolved = append(resolved, resolvedTarget{owner: ownerStr, repo: repoStr, token: targetToken, classified: classified})
+
+		// 一覧表示
+		fmt.Printf("対象リポジトリ: %s/%s\n", ownerStr, repoStr)
+		newCount, updateCount := countGitHubClassified(classified, len(tasks))
+		if classified != nil {
+			fmt.Printf("登録対象 %d 件 (新規 %d 件 / 更新 %d 件):\n", len(tasks), newCount, updateCount)
+		} else {
+			fmt.Printf("登録対象 %d 件:\n", len(tasks))
+		}
+		for i, t := range tasks {
+			kind := "Secret"
+			if !t.entry.Secret {
+				kind = "Variable"
+			}
+			scope := t.envScope
+			if scope == "" {
+				scope = "repo"
+			}
+			if classified != nil {
+				marker, label := "⟳", "更新"
+				if classified[i].isNew {
+					marker, label = "+", "新規"
+				}
+				fmt.Printf("  %s %s (env: %s, %s) [%s]\n", marker, t.entry.Key, scope, kind, label)
+			} else {
+				fmt.Printf("  %s (env: %s, %s)\n", t.entry.Key, scope, kind)
+			}
+		}
+		fmt.Println()
 	}
-	fmt.Println()
 
 	if len(tasks) == 0 {
 		fmt.Println("登録対象がありません")
@@ -186,14 +216,35 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		return nil
 	}
 
-	// ---- 確認（更新がある場合、または分類不可の場合） ----
-	needsConfirm := classified == nil || updateCount > 0
+	// ---- 確認（更新がある場合、または分類不可の場合）----
+	// 一覧表示フェーズで計算した分類結果（resolved[].classified）を再利用し API 二重呼び出しを避ける。
+	// skipped のターゲットはスキップ済みのため送信対象件数から除外する。
+	// 複数ターゲット時は常に確認（安全側）。単一ターゲット時は更新有無で判定。
+	activeResolved := 0
+	for _, r := range resolved {
+		if !r.skipped {
+			activeResolved++
+		}
+	}
+	needsConfirm := false
+	if activeResolved > 1 {
+		needsConfirm = true
+	} else if activeResolved == 1 {
+		// 送信可能な単一ターゲット: 保存済み分類を再利用
+		for _, r := range resolved {
+			if !r.skipped {
+				_, updateCount := countGitHubClassified(r.classified, len(tasks))
+				needsConfirm = r.classified == nil || updateCount > 0
+				break
+			}
+		}
+	}
 	if needsConfirm && !opts.Yes {
 		if !config.IsTTY(os.Stdin) {
 			return fmt.Errorf("対話できない環境です。確認をスキップするには --yes を付けてください")
 		}
-		if classified != nil && updateCount > 0 {
-			fmt.Printf("上記に更新(上書き) %d 件が含まれます。GitHub に登録します。続行しますか? (y/N) ", updateCount)
+		if activeResolved > 1 {
+			fmt.Printf("上記を GitHub の %d リポジトリに登録します（既存は上書き）。続行しますか? (y/N) ", activeResolved)
 		} else {
 			fmt.Print("上記を GitHub に登録します。続行しますか? (y/N) ")
 		}
@@ -206,9 +257,53 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		}
 	}
 
-	// ---- 送信 ----
-	okCount, ngCount := 0, 0
+	// ---- 各ターゲットへ送信（保存済み分類を再利用して存在確認の二重呼び出しを避ける）----
+	// skipped が true のターゲットはトークン未設定のため送信をスキップし、失敗として集計する。
+	totalOK, totalNG := 0, 0
+	for _, r := range resolved {
+		if r.skipped {
+			// 一覧表示フェーズで警告済み。失敗件数として集計する。
+			totalNG += len(tasks)
+			continue
+		}
+		if activeResolved > 1 {
+			fmt.Printf("\n--- リポジトリ: %s/%s ---\n", r.owner, r.repo)
+		}
+		ok, ng := syncOneGitHubTarget(client, r.token, r.owner, r.repo, tasks, r.classified)
+		totalOK += ok
+		totalNG += ng
+	}
 
+	if activeResolved > 1 {
+		fmt.Printf("\n全体完了: 成功 %d / 失敗 %d\n", totalOK, totalNG)
+	} else {
+		fmt.Printf("\n完了: 成功 %d / 失敗 %d\n", totalOK, totalNG)
+	}
+	if totalNG > 0 {
+		os.Exit(1)
+	}
+	return nil
+}
+
+// resolveOwnerRepo は GitHubTarget から owner/repo を解決する。
+// tgt.Repo が非空ならそれを使い、空なら appCfg 経由で git remote フォールバックを試みる。
+func resolveOwnerRepo(tgt config.GitHubTarget, appCfg *config.AppConfig) (owner, repo string, err error) {
+	repoStr := tgt.Repo
+	if repoStr != "" {
+		parts := strings.Split(repoStr, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return "", "", fmt.Errorf("リポジトリの形式が不正です（owner/repo 形式で指定してください）: %q", repoStr)
+		}
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
+	}
+	// 空なら既存の resolveGitHubRepo（環境変数 > config > git remote）で解決
+	return resolveGitHubRepo(appCfg)
+}
+
+// syncOneGitHubTarget は 1 つの GitHub リポジトリへ tasks を送信し、成功数・失敗数を返す。
+// classified は呼び出し元で計算済みの分類結果（nil の場合は variable の存在確認 API にフォールバック）。
+// os.Exit は呼ばない。
+func syncOneGitHubTarget(client *http.Client, token, owner, repo string, tasks []githubTask, classified []githubClassifiedTask) (okCount, ngCount int) {
 	// 公開鍵キャッシュ（envScope ごと）
 	type cachedKeyEntry struct {
 		keyID string
@@ -240,8 +335,7 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 			}
 			sendErr = githubPutSecret(client, token, owner, repo, t.envScope, t.entry.Key, encrypted, cached.keyID)
 		} else {
-			// variable: 既存判定で POST(新規) or PATCH(更新) を分岐。
-			// 分類フェーズで取得済みなら classified を再利用し、存在確認 API の二重呼び出しを避ける。
+			// variable: 分類フェーズで取得済みなら classified を再利用し、存在確認 API の二重呼び出しを避ける。
 			// classified==nil（分類スキップ）のときだけ存在確認 API にフォールバックする。
 			var exists bool
 			if classified != nil {
@@ -282,12 +376,7 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 			okCount++
 		}
 	}
-
-	fmt.Printf("\n完了: 成功 %d / 失敗 %d\n", okCount, ngCount)
-	if ngCount > 0 {
-		os.Exit(1)
-	}
-	return nil
+	return okCount, ngCount
 }
 
 // resolveGitHubRepo は config (環境変数 > config ファイル) または git remote から owner/repo を解決する。

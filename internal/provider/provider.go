@@ -3,11 +3,13 @@ package provider
 // Options はコマンドラインフラグの値を保持する。
 // cmd/env-sync から provider へ渡すための共通型。
 type Options struct {
-	Env      string
-	Def      string
-	DryRun   bool
-	Yes      bool
-	Provider string
+	Env           string
+	Def           string
+	DryRun        bool
+	Yes           bool
+	Provider      string
+	VercelProject string // --vercel-project で指定した場合のターゲット名（モノレポ対応）
+	GitHubRepo    string // --github-repo で指定した場合のターゲット名（モノレポ対応）
 }
 
 // Entry は provider 非依存の共通ドメインモデル。

@@ -30,7 +30,7 @@
 //	global:  ~/.config/env-sync/config.yaml (XDG_CONFIG_HOME を尊重)
 //	project: .env-sync.config.yaml (カレントディレクトリ)
 //
-// YAML スキーマ:
+// YAML スキーマ（単一プロジェクト）:
 //
 //	vercel:
 //	  token:      <Vercel トークン>
@@ -39,6 +39,26 @@
 //	github:
 //	  token: <GitHub トークン>
 //	  repo:  <owner/repo>
+//
+// YAML スキーマ（モノレポ: 複数プロジェクト / 複数リポジトリ）:
+//
+//	vercel:
+//	  token: <デフォルトトークン>
+//	  team_id: <デフォルトチーム ID>
+//	  projects:
+//	    - name: app-a
+//	      project_id: <プロジェクト ID>
+//	    - name: app-b
+//	      project_id: <プロジェクト ID>
+//	      token: <per-project トークン（任意）>
+//	github:
+//	  token: <デフォルトトークン>
+//	  repos:
+//	    - name: frontend
+//	      repo: org/frontend
+//	    - name: backend
+//	      repo: org/backend
+//	      token: <per-repo トークン（任意）>
 //
 // セキュリティ: global config にトークンが含まれていてパーミッションが 0600 でない場合は警告を出力する。
 //
@@ -260,6 +280,8 @@ func printUsage() {
   --def <file>              定義 YAML（デフォルト env-sync.yaml）
   --dry-run                 送信せず新規/更新の区別を含む登録予定一覧を表示（値は出さない）
   --yes, -y                 更新(上書き)を含む場合の確認をスキップして送信
+  --vercel-project <name>   config の vercel.projects から指定名のプロジェクトのみ同期（モノレポ対応）
+  --github-repo <name>      config の github.repos から指定名のリポジトリのみ同期（モノレポ対応）
   --version                 バージョン情報を表示して終了
   -h, --help                このヘルプを表示
 
@@ -293,7 +315,7 @@ config ファイル（環境変数の代替）:
   global:  ~/.config/env-sync/config.yaml  (XDG_CONFIG_HOME を尊重)
   project: .env-sync.config.yaml           (カレントディレクトリ)
 
-  スキーマ:
+  スキーマ（単一プロジェクト）:
     vercel:
       token:      <Vercel トークン>
       project_id: <プロジェクト ID>
@@ -301,6 +323,26 @@ config ファイル（環境変数の代替）:
     github:
       token: <GitHub トークン>
       repo:  <owner/repo>
+
+  スキーマ（モノレポ: 複数プロジェクト / 複数リポジトリ）:
+    vercel:
+      token: <デフォルトトークン（per-project で上書き可）>
+      team_id: <デフォルトチーム ID>
+      projects:
+        - name: app-a
+          project_id: <プロジェクト ID>
+        - name: app-b
+          project_id: <プロジェクト ID>
+          token: <per-project トークン（任意）>
+          team_id: <per-project チーム ID（任意）>
+    github:
+      token: <デフォルトトークン（per-repo で上書き可）>
+      repos:
+        - name: frontend
+          repo: org/frontend
+        - name: backend
+          repo: org/backend
+          token: <per-repo トークン（任意）>
 
   ※ global config にトークンが含まれていてパーミッションが 0600 でない場合は警告を出力します
 

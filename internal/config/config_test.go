@@ -167,3 +167,47 @@ func TestProviderVal_UnmarshalYAML_Nil(t *testing.T) {
 		t.Errorf("provider フィールド未指定なのに非 nil: %v", v.Provider)
 	}
 }
+
+// --- --vercel-project / --github-repo フラグのテスト ---
+
+func TestParseFlags_VercelProject_SpaceForm(t *testing.T) {
+	opts := config.ParseFlags([]string{"--vercel-project", "app-a"}, nil, nil)
+	if opts.VercelProject != "app-a" {
+		t.Errorf("VercelProject = %q, want app-a", opts.VercelProject)
+	}
+}
+
+func TestParseFlags_VercelProject_EqualForm(t *testing.T) {
+	opts := config.ParseFlags([]string{"--vercel-project=app-b"}, nil, nil)
+	if opts.VercelProject != "app-b" {
+		t.Errorf("VercelProject = %q, want app-b", opts.VercelProject)
+	}
+}
+
+func TestParseFlags_GitHubRepo_SpaceForm(t *testing.T) {
+	opts := config.ParseFlags([]string{"--github-repo", "frontend"}, nil, nil)
+	if opts.GitHubRepo != "frontend" {
+		t.Errorf("GitHubRepo = %q, want frontend", opts.GitHubRepo)
+	}
+}
+
+func TestParseFlags_GitHubRepo_EqualForm(t *testing.T) {
+	opts := config.ParseFlags([]string{"--github-repo=backend"}, nil, nil)
+	if opts.GitHubRepo != "backend" {
+		t.Errorf("GitHubRepo = %q, want backend", opts.GitHubRepo)
+	}
+}
+
+func TestParseFlags_VercelProject_Default(t *testing.T) {
+	opts := config.ParseFlags([]string{}, nil, nil)
+	if opts.VercelProject != "" {
+		t.Errorf("VercelProject のデフォルト = %q, want empty", opts.VercelProject)
+	}
+}
+
+func TestParseFlags_GitHubRepo_Default(t *testing.T) {
+	opts := config.ParseFlags([]string{}, nil, nil)
+	if opts.GitHubRepo != "" {
+		t.Errorf("GitHubRepo のデフォルト = %q, want empty", opts.GitHubRepo)
+	}
+}
