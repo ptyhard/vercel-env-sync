@@ -58,8 +58,17 @@ func ParseSetupFlags(argv []string, printUsageFn func()) SetupOptions {
 	return opts
 }
 
+// yamlSingleQuote は value を YAML シングルクォートスカラとしてエスケープして返す。
+// シングルクォートスカラ内では ' のみ ” に置換すればよく、
+// :、#、$、改行などの特殊文字を含む値でも安全に扱える。
+func yamlSingleQuote(value string) string {
+	escaped := strings.ReplaceAll(value, "'", "''")
+	return "'" + escaped + "'"
+}
+
 // BuildSetupYAML は SetupAnswers から認証情報 config の YAML テキストを生成する。
 // 生成される YAML は AppConfig スキーマに準拠し LoadAppConfig() でパースできる。
+// ユーザー入力値は YAML シングルクォートスカラとして安全にエスケープして出力する。
 func BuildSetupYAML(answers SetupAnswers) string {
 	var sb strings.Builder
 	sb.WriteString("# env-sync 認証情報 config\n")
@@ -69,16 +78,16 @@ func BuildSetupYAML(answers SetupAnswers) string {
 	if answers.UseVercel {
 		sb.WriteString("vercel:\n")
 		sb.WriteString("  token: ")
-		sb.WriteString(answers.VercelTokenRef)
+		sb.WriteString(yamlSingleQuote(answers.VercelTokenRef))
 		sb.WriteString("\n")
 		if answers.VercelProjectID != "" {
 			sb.WriteString("  project_id: ")
-			sb.WriteString(answers.VercelProjectID)
+			sb.WriteString(yamlSingleQuote(answers.VercelProjectID))
 			sb.WriteString("\n")
 		}
 		if answers.VercelTeamID != "" {
 			sb.WriteString("  team_id: ")
-			sb.WriteString(answers.VercelTeamID)
+			sb.WriteString(yamlSingleQuote(answers.VercelTeamID))
 			sb.WriteString("\n")
 		}
 	}
@@ -86,11 +95,11 @@ func BuildSetupYAML(answers SetupAnswers) string {
 	if answers.UseGitHub {
 		sb.WriteString("github:\n")
 		sb.WriteString("  token: ")
-		sb.WriteString(answers.GitHubTokenRef)
+		sb.WriteString(yamlSingleQuote(answers.GitHubTokenRef))
 		sb.WriteString("\n")
 		if answers.GitHubRepo != "" {
 			sb.WriteString("  repo: ")
-			sb.WriteString(answers.GitHubRepo)
+			sb.WriteString(yamlSingleQuote(answers.GitHubRepo))
 			sb.WriteString("\n")
 		}
 	}
@@ -100,6 +109,7 @@ func BuildSetupYAML(answers SetupAnswers) string {
 
 // WriteSetupFile は path へ content を書き込む。
 // force なしで既存ファイルがある場合はエラーを返す。
+// --force で既存ファイルを上書きする場合も os.Chmod で perm を確実に適用する。
 func WriteSetupFile(path, content string, perm os.FileMode, force bool) error {
 	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	if !force {
@@ -118,6 +128,11 @@ func WriteSetupFile(path, content string, perm os.FileMode, force bool) error {
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("config ファイルの書き込みに失敗: %s: %s", path, err)
+	}
+	// --force 上書き時は os.OpenFile の perm が既存ファイルに適用されないため
+	// 書き込み完了後に明示的にパーミッションを設定する。
+	if err := os.Chmod(path, perm); err != nil {
+		return fmt.Errorf("config ファイルのパーミッション設定に失敗: %s: %s", path, err)
 	}
 	return nil
 }

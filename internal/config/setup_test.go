@@ -89,10 +89,10 @@ func TestBuildSetupYAML_TokenEnvRef(t *testing.T) {
 
 func TestBuildSetupYAML_TokenPlain(t *testing.T) {
 	answers := config.SetupAnswers{
-		UseVercel:       true,
-		VercelTokenRef:  "my-plain-vercel-token",
-		HasPlainToken:   true,
-		UseGitHub:       false,
+		UseVercel:      true,
+		VercelTokenRef: "my-plain-vercel-token",
+		HasPlainToken:  true,
+		UseGitHub:      false,
 	}
 	out := config.BuildSetupYAML(answers)
 	if !strings.Contains(out, "my-plain-vercel-token") {
@@ -221,6 +221,34 @@ func TestWriteSetupFile_ForceOverwrite(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != "new" {
 		t.Error("--force 付きでも上書きされていない")
+	}
+}
+
+func TestWriteSetupFile_ForceOverwrite_Permissions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secret.yaml")
+
+	// 既存ファイルを 0644 で作成しておく
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// --force で 0600 を指定して上書き
+	if err := config.WriteSetupFile(path, "new", 0o600, true); err != nil {
+		t.Fatalf("--force + 0600 で WriteSetupFile がエラー: %v", err)
+	}
+
+	// 上書き後にパーミッションが 0600 に変更されていること
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("--force 上書き後のパーミッションが 0600 でない: %04o", info.Mode().Perm())
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "new" {
+		t.Error("--force 付きでも内容が上書きされていない")
 	}
 }
 
