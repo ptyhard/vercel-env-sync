@@ -499,3 +499,22 @@ vercel:
 		t.Errorf("0600 の場合は警告不要だが出力あり: %q", output)
 	}
 }
+
+// --- 空変数名バリデーションテスト ---
+
+func TestLoadAppConfig_EnvRefExpansion_EmptyVarNameError(t *testing.T) {
+	// ${:-fallback} のように変数名が空の場合はエラーを期待（タイポ検出）
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "no-global"))
+	chdirCleanup(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, ".env-sync.config.yaml"), []byte(`
+vercel:
+  token: ${:-fallback}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := config.LoadAppConfig()
+	if err == nil {
+		t.Fatal("空変数名参照に対してエラーを期待したが nil")
+	}
+}
