@@ -59,7 +59,7 @@ func ParseSetupFlags(argv []string, printUsageFn func()) SetupOptions {
 }
 
 // yamlSingleQuote は value を YAML シングルクォートスカラとしてエスケープして返す。
-// シングルクォートスカラ内では ' のみ ” に置換すればよく、
+// シングルクォートスカラ内では ' のみ ” （シングルクォート2つ）に置換すればよく、
 // :、#、$、改行などの特殊文字を含む値でも安全に扱える。
 func yamlSingleQuote(value string) string {
 	escaped := strings.ReplaceAll(value, "'", "''")
@@ -289,7 +289,9 @@ func setupReadLine(reader *bufio.Reader) (string, error) {
 	if err != nil && err != io.EOF {
 		return "", fmt.Errorf("入力の読み込みに失敗: %w", err)
 	}
-	return strings.TrimRight(line, "\r\n"), nil
+	// 改行文字のほか前後の空白も除去する。
+	// 末尾スペース等が project_id / repo / token に混入すると認証や ID 解決が失敗しやすいため。
+	return strings.TrimSpace(line), nil
 }
 
 func setupReadYesNo(reader *bufio.Reader, defaultYes bool) (bool, error) {
