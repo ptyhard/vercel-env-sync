@@ -1,21 +1,23 @@
 # env-sync
 
-定義ファイル `env-sync.yaml` で宣言した環境変数を **Vercel** または **GitHub Actions** へ一括登録（同期）する Go 製 CLI。
-1 つの定義ファイルから、変数ごとに同期先を選んで Vercel / GitHub Actions の両方へまとめて反映できる。
+English | [日本語](README.ja.md)
 
-- **Vercel**: REST API (`POST /v10/projects/{id}/env?upsert=true`) を使うため、再実行すると既存の変数は **更新（upsert）** される。
-- **GitHub Actions**: Secrets（sealed box 暗号化）と Variables（平文）の両方に対応する。
+A Go CLI that bulk-registers (syncs) environment variables declared in an `env-sync.yaml` definition file to **Vercel** and/or **GitHub Actions**.
+From a single definition file you can choose the sync target per variable and push to both Vercel and GitHub Actions at once.
 
-## 仕組み
+- **Vercel**: Uses the REST API (`POST /v10/projects/{id}/env?upsert=true`), so re-running **upserts** existing variables.
+- **GitHub Actions**: Supports both Secrets (sealed-box encrypted) and Variables (plaintext).
 
-- **secret / environments は `env-sync.yaml` で明示的に宣言**する（キー名のヒューリスティックに頼らない）。
-- **値は `env-sync.yaml` には書かない**（git にコミットされるため）。値は `.env(.production)` から取得する。
-- 定義に無いキーは登録されない（`.env` にあっても警告のうえスキップ）。
-- 定義にあるが `.env` に値が無いキーも警告のうえスキップ。
+## How It Works
 
-## インストール
+- **`secret` / `environments` are declared explicitly in `env-sync.yaml`** — no heuristics based on key names.
+- **Values are never written to `env-sync.yaml`** (it is committed to git). Values are read from `.env(.production)`.
+- Keys not declared in the definition are not registered (warned and skipped even if present in `.env`).
+- Keys declared but missing from `.env` are also warned and skipped.
 
-### Homebrew（macOS / Linux）
+## Installation
+
+### Homebrew (macOS / Linux)
 
 ```bash
 brew install ptyhard/tap/env-sync
@@ -27,132 +29,132 @@ brew install ptyhard/tap/env-sync
 go install github.com/ptyhard/env-sync/cmd/env-sync@latest
 ```
 
-### バイナリを直接ダウンロード
+### Download Binaries
 
-[GitHub Releases](https://github.com/ptyhard/env-sync/releases) から最新バイナリをダウンロードしてください。
-darwin/amd64、darwin/arm64、linux/amd64、linux/arm64 向けアーカイブが提供されます。
+Download the latest binary from [GitHub Releases](https://github.com/ptyhard/env-sync/releases).
+Archives are provided for darwin/amd64, darwin/arm64, linux/amd64, and linux/arm64.
 
-### ソースからビルド
+### Build from Source
 
 ```bash
 go build -o env-sync ./cmd/env-sync
 ```
 
-## クイックスタート
+## Quick Start
 
 ```bash
-# 1. 認証情報 config を対話生成（Vercel token / project_id / GitHub token / repo を設定）
+# 1. Interactively generate auth config (Vercel token / project_id / GitHub token / repo)
 env-sync setup
 
-# 2. 既存の .env から定義ファイルの雛形を生成
+# 2. Generate a definition file scaffold from an existing .env
 env-sync init
 
-# 3. 生成された env-sync.yaml の secret / environments / provider を見直す
+# 3. Review the generated env-sync.yaml — check secret / environments / provider
 
-# 4. 送信せずに登録予定を確認（dry-run）
+# 4. Preview what would be registered without sending (dry-run)
 VERCEL_TOKEN=xxxxx env-sync --env .env.production --dry-run
 
-# 5. 本番投入（更新がある場合のみ y/N 確認）
+# 5. Deploy for real (prompts y/N only when updates exist)
 VERCEL_TOKEN=xxxxx env-sync --env .env.production
 ```
 
-## 1. setup で認証情報 config を生成
+## 1. Generate Auth Config with `setup`
 
-認証情報 config ファイル（`.env-sync.config.yaml` または `~/.config/env-sync/config.yaml`）を対話プロンプトで生成します。
+Interactively generates an auth config file (`.env-sync.config.yaml` or `~/.config/env-sync/config.yaml`).
 
 ```bash
-# プロジェクト config（.env-sync.config.yaml）を生成
+# Generate project config (.env-sync.config.yaml)
 env-sync setup
 
-# global config（~/.config/env-sync/config.yaml）を生成
+# Generate global config (~/.config/env-sync/config.yaml)
 env-sync setup --global
 
-# 既存ファイルを上書き（--force なしでは上書きを拒否してエラー）
+# Overwrite existing file (without --force, overwrite is refused with an error)
 env-sync setup --force
 ```
 
-- Vercel / GitHub それぞれについて、設定するか・project_id・repo・token 入力方法を順に質問します
-- **token はデフォルトで `${VERCEL_TOKEN}` / `${GITHUB_TOKEN}` の環境変数参照形式**で書き出されます（平文トークンをファイルに書かずに済む推奨形式）
-- 生 token を直接書く場合、または `--global` 出力時はファイルを **0600** で作成し、その旨を案内します
-- 非対話環境（TTY なし）では手書き方法を案内してエラーで停止します
+- For each of Vercel / GitHub, prompts whether to configure, project_id, repo, and token input method
+- **Tokens default to the environment variable reference format `${VERCEL_TOKEN}` / `${GITHUB_TOKEN}`** (recommended — avoids writing plaintext tokens to the file)
+- When writing raw tokens directly or with `--global`, the file is created with **0600** permissions
+- In non-interactive environments (no TTY), exits with an error and instructions for manual configuration
 
-> **注意**: このファイルをコミットしないよう `.gitignore` に `.env-sync.config.yaml` を追記することを推奨します。
+> **Note**: It is recommended to add `.env-sync.config.yaml` to `.gitignore` to prevent committing this file.
 
-## 2. init で変数定義の雛形を生成
+## 2. Generate Variable Definition Scaffold with `init`
 
-既存の `.env` を読み込み、値を含まない `env-sync.yaml` の雛形を自動生成します。
+Reads an existing `.env` and auto-generates an `env-sync.yaml` scaffold without values.
 
 ```bash
-# 基本（.env から env-sync.yaml を生成）
+# Basic (generate env-sync.yaml from .env)
 env-sync init
 
-# 別ファイルを指定
+# Specify a different file
 env-sync init --env .env.production
 
-# 出力先を指定
+# Specify output destination
 env-sync init --env .env.production --def env-sync.production.yaml
 
-# 既存ファイルを上書き（--force なしでは上書きを拒否してエラー）
+# Overwrite existing file (without --force, overwrite is refused with an error)
 env-sync init --env .env.production --force
 ```
 
-- `NEXT_PUBLIC_` プレフィックスのキーは `secret: false`、それ以外は `secret: true` を初期値として設定します
-- これはあくまで**雛形**です。secret は投入前に必ず見直してください
-- **値は一切書き込まれません**（`.env` の値が yaml に混入することはありません）
-- 既存の `env-sync.yaml` がある場合、`--force` なしでは上書きを拒否してエラーで終了します
+- Keys with the `NEXT_PUBLIC_` prefix default to `secret: false`; all others default to `secret: true`
+- This is only a **scaffold** — always review secrets before deploying
+- **No values are written** (`.env` values never leak into the yaml)
+- If `env-sync.yaml` already exists, overwrite is refused without `--force`
 
-## 3. Vercel へ同期
+## 3. Sync to Vercel
 
-### 事前準備
+### Prerequisites
 
 ```bash
-# プロジェクトをリンク（初回のみ。.vercel/project.json が生成される）
+# Link the project (first time only — creates .vercel/project.json)
 vercel link
 
-# アクセストークンを発行
+# Issue an access token
 #   https://vercel.com/account/tokens
 ```
 
-### 同期
+### Sync
 
 ```bash
-# dry-run（送信せず新規/更新の区別を含む登録予定一覧を表示。値は表示されない）
+# dry-run (shows planned registrations with new/update classification — values are not shown)
 VERCEL_TOKEN=xxxxx env-sync --env .env.production --dry-run
 
-# 本番投入（新規/更新を分類して表示。更新がある場合のみ y/N 確認）
+# Deploy (classifies as new/update and displays — prompts y/N only when updates exist)
 VERCEL_TOKEN=xxxxx env-sync --env .env.production
 
-# 更新(上書き)確認をスキップ（CI など）
+# Skip update confirmation (for CI, etc.)
 VERCEL_TOKEN=xxxxx env-sync --env .env.production --yes
 ```
 
-送信前に provider へ問い合わせ、各キーを「`+ KEY [新規]`」または「`⟳ KEY [更新]`」として分類表示します。
-**更新（上書き）対象がある場合のみ** `y/N` の確認プロンプトが表示されます。新規登録のみなら確認なしで送信します。
-`--yes`（`-y`）を付けると確認をスキップできます。非対話環境（TTY なし）で更新対象があり `--yes` がない場合は安全のためエラーで停止します。
-`--dry-run` 時もトークンが設定されていれば新規/更新の分類を表示します（送信はしません）。
+Before sending, the tool queries the provider and classifies each key as "`+ KEY [new]`" or "`⟳ KEY [update]`".
+**The `y/N` confirmation prompt only appears when there are updates (overwrites).** New-only registrations proceed without confirmation.
+Use `--yes` (`-y`) to skip the confirmation. In non-interactive environments (no TTY), if updates exist without `--yes`, the tool exits with an error for safety.
+During `--dry-run`, new/update classification is shown if the token is set (nothing is sent).
 
-## 4. GitHub Actions へ同期
+## 4. Sync to GitHub Actions
 
-`--provider github` を指定すると GitHub Actions の Secrets/Variables に同期します。
+Use `--provider github` to sync to GitHub Actions Secrets/Variables.
 
 ```bash
-# dry-run（送信せず新規/更新の区別を含む登録予定一覧を表示。値は表示されない）
+# dry-run (shows planned registrations with new/update classification — values are not shown)
 GITHUB_REPO=owner/repo env-sync --provider github --env .env.production --dry-run
 
-# 本番投入（リポジトリレベル。更新がある場合のみ確認プロンプトが表示される）
+# Deploy (repository level — prompts only when updates exist)
 GITHUB_TOKEN=xxxxx GITHUB_REPO=owner/repo env-sync --provider github --env .env.production
 
-# named environment に登録（env-sync.yaml の environments フィールドで指定）
-# environments: [production] を yaml に書けばその environment に登録される
+# Register to a named environment (specified via the environments field in env-sync.yaml)
+# Write environments: [production] in the yaml to register to that environment
 GITHUB_TOKEN=xxxxx env-sync --provider github --env .env.production
 
-# 更新(上書き)確認をスキップ（CI など）
+# Skip update confirmation (for CI, etc.)
 GITHUB_TOKEN=xxxxx env-sync --provider github --yes --env .env.production
 ```
 
-`GITHUB_REPO` を省略すると `git remote origin` から `owner/repo` を自動取得します。
+If `GITHUB_REPO` is omitted, `owner/repo` is auto-detected from `git remote origin`.
 
-### `env-sync.yaml` での GitHub 向け設定例
+### GitHub Configuration Example in `env-sync.yaml`
 
 ```yaml
 defaults:
@@ -160,164 +162,164 @@ defaults:
 
 variables:
   DATABASE_URL:
-    secret: true                      # repo レベルの Secret
+    secret: true                      # Repository-level Secret
   PUBLIC_FLAG:
-    secret: false                     # repo レベルの Variable
+    secret: false                     # Repository-level Variable
   API_KEY_PROD:
     secret: true
-    environments: [production]        # production environment の Secret
+    environments: [production]        # Production environment Secret
   FEATURE_FLAG:
     secret: false
-    environments: [production, staging]  # production, staging の Variable
+    environments: [production, staging]  # Production & staging Variable
 ```
 
-> **注意**: `environments` に指定した named environment は GitHub 上で事前に作成が必要です。存在しない environment 名を指定するとエラーになります。
+> **Note**: Named environments specified in `environments` must be pre-created on GitHub. Specifying a non-existent environment name results in an error.
 
-### セキュリティ
+### Security
 
-- `secret: true` の変数は **GitHub の公開鍵で sealed box 暗号化**してから PUT します。平文は送信しません。
-- 登録対象の一覧表示・確認プロンプト・成否ログのいずれにも **値は出力されません**。`--dry-run` でも同様。
-- 公開鍵の長さ（32 バイト）を検証し、不正な鍵では処理を中止します。
-- 公開鍵キャッシュは envScope（environment）ごとに管理します（スコープで鍵が異なるため）。
+- Variables with `secret: true` are **encrypted with GitHub's public key using sealed-box encryption** before PUT. Plaintext is never sent.
+- **Values are never shown** in the registration list, confirmation prompt, or success/failure logs. Same for `--dry-run`.
+- Public key length (32 bytes) is validated; invalid keys abort the operation.
+- Public key cache is managed per envScope (environment), as keys differ by scope.
 
-## 5. Vercel と GitHub Actions を混在させる
+## 5. Mixing Vercel and GitHub Actions
 
-変数ごとに `provider` を指定すると、1 つの `env-sync.yaml` から Vercel と GitHub Actions の両方へ同時に同期できます。
+By specifying `provider` per variable, you can sync to both Vercel and GitHub Actions simultaneously from a single `env-sync.yaml`.
 
 ```yaml
 defaults:
   secret: true
-  # defaults.provider を指定するとすべての変数のデフォルト同期先を変更できる
+  # Set defaults.provider to change the default sync target for all variables
   # provider: github
 
 variables:
   DATABASE_URL:
     secret: true
-    provider: vercel            # Vercel のみに同期
+    provider: vercel            # Sync to Vercel only
 
   GITHUB_ACTIONS_TOKEN:
     secret: true
-    provider: github            # GitHub Actions のみに同期
+    provider: github            # Sync to GitHub Actions only
 
   SHARED_SECRET:
     secret: true
-    provider: [vercel, github]  # 両方に同期
+    provider: [vercel, github]  # Sync to both
 
   PUBLIC_API_URL:
-    secret: false               # provider 未指定 → --provider フラグのデフォルト（vercel）
+    secret: false               # No provider specified → defaults to --provider flag (vercel)
 ```
 
 ```bash
-# トークンを両方渡せば 1 回の実行で Vercel / GitHub の両方へ振り分けて同期される
+# Provide both tokens to sync to Vercel and GitHub in a single run
 VERCEL_TOKEN=xxxxx GITHUB_TOKEN=yyyyy env-sync --env .env.production
 ```
 
-解決優先順位（高い順）: **変数個別の `provider`** → **`defaults.provider`** → **CLI `--provider` フラグ**（デフォルト `vercel`）
+Resolution priority (highest first): **per-variable `provider`** → **`defaults.provider`** → **CLI `--provider` flag** (default `vercel`)
 
-不正な値（`vercel` / `github` 以外）を指定するとエラーで中止します。`--dry-run` では各変数の `providers` 列で振り分け先を確認できます。
+Invalid values (anything other than `vercel` / `github`) cause an error. During `--dry-run`, the `providers` column shows the routing for each variable.
 
-## 6. config ファイルで認証情報・ID を管理する
+## 6. Managing Auth Credentials and IDs via Config File
 
-環境変数の代わりに YAML ファイルでトークンや ID を管理できます。毎回 `VERCEL_TOKEN=...` を渡す手間を省けます。
+Instead of environment variables, you can manage tokens and IDs in a YAML file, eliminating the need to pass `VERCEL_TOKEN=...` every time.
 
-### config ファイルの場所
+### Config File Locations
 
-| 種別 | パス |
+| Type | Path |
 |------|------|
-| global | `~/.config/env-sync/config.yaml`（`XDG_CONFIG_HOME` を尊重） |
-| project | `.env-sync.config.yaml`（カレントディレクトリ） |
+| global | `~/.config/env-sync/config.yaml` (respects `XDG_CONFIG_HOME`) |
+| project | `.env-sync.config.yaml` (current directory) |
 
-どちらのファイルも存在しない場合は従来通り環境変数＋既存フォールバックのみで動作します（後方互換）。
+If neither file exists, the tool falls back to environment variables and existing fallbacks only (backward compatible).
 
-### 解決優先順位
+### Resolution Priority
 
 ```
-環境変数 > project config > global config > 既存フォールバック（.vercel/project.json / git remote）
+Environment variables > project config > global config > existing fallbacks (.vercel/project.json / git remote)
 ```
 
-環境変数が設定されていれば常に優先されます。
+Environment variables always take precedence when set.
 
-### スキーマ
+### Schema
 
 ```yaml
 vercel:
-  token:      <Vercel アクセストークン>
-  project_id: <プロジェクト ID>
-  team_id:    <チーム(Org) ID>
+  token:      <Vercel access token>
+  project_id: <project ID>
+  team_id:    <team (org) ID>
 github:
-  token: <GitHub アクセストークン>
-  repo:  <owner/repo 形式のリポジトリ名>
+  token: <GitHub access token>
+  repo:  <owner/repo format repository name>
 ```
 
-### 複数 Vercel プロジェクト / 複数 GitHub リポジトリ（モノレポ）
+### Multiple Vercel Projects / Multiple GitHub Repos (Monorepo)
 
-turborepo などのモノレポで 1 リポジトリに複数アプリがある場合、`vercel.projects` / `github.repos` の配列で複数の同期先を定義できます。1 回の実行で定義済みの全ターゲットへ環境変数を配れます。
+For monorepos (e.g., Turborepo) with multiple apps in a single repository, define multiple sync targets using `vercel.projects` / `github.repos` arrays. A single run distributes environment variables to all defined targets.
 
 ```yaml
 vercel:
-  token: <共通トークン>            # 各プロジェクトで token 省略時のフォールバック
-  team_id: team_xxxxxxxx          # 各プロジェクトで team_id 省略時のフォールバック
+  token: <shared token>              # Fallback when token is omitted per project
+  team_id: team_xxxxxxxx             # Fallback when team_id is omitted per project
   projects:
-    - name: web                   # --vercel-project で絞り込む際の識別名
+    - name: web                      # Identifier for filtering with --vercel-project
       project_id: prj_web
     - name: admin
       project_id: prj_admin
-      team_id: team_yyyyyyyy      # このプロジェクトだけ別チーム
-      token: ${ADMIN_VERCEL_TOKEN} # このプロジェクトだけ別トークン
+      team_id: team_yyyyyyyy         # Different team for this project only
+      token: ${ADMIN_VERCEL_TOKEN}   # Different token for this project only
 
 github:
-  token: <共通トークン>            # 各リポジトリで token 省略時のフォールバック
+  token: <shared token>              # Fallback when token is omitted per repo
   repos:
     - name: web
       repo: myorg/web
     - name: infra
       repo: myorg/infra
-      token: ${INFRA_GH_TOKEN}    # このリポジトリだけ別トークン
+      token: ${INFRA_GH_TOKEN}      # Different token for this repo only
 ```
 
-- 各ターゲットの `token` / `team_id` を省略すると、トップレベルの `vercel.token` / `vercel.team_id` / `github.token`（さらに環境変数）にフォールバックします。
-- `token` などには `${VAR}` / `${VAR:-default}` 参照も使えます。
-- **複数定義時は各ターゲットの `project_id` / `repo` が必須**です（`.vercel/project.json` / git remote フォールバックは単一定義時のみ有効）。
+- When `token` / `team_id` is omitted for a target, it falls back to the top-level `vercel.token` / `vercel.team_id` / `github.token` (and then environment variables).
+- `token` values support `${VAR}` / `${VAR:-default}` references.
+- **When multiple targets are defined, `project_id` / `repo` is required for each** (`.vercel/project.json` / git remote fallback is only available for single-target configurations).
 
 ```bash
-# 定義済みの全 Vercel プロジェクトへ同期
+# Sync to all defined Vercel projects
 env-sync --env .env.production
 
-# 特定のプロジェクト / リポジトリだけに絞り込む
+# Filter to a specific project / repo
 env-sync --env .env.production --vercel-project admin
 env-sync --provider github --env .env.production --github-repo infra
 ```
 
-実行時は各ターゲットごとに「対象プロジェクト / 対象リポジトリ」見出しと新規/更新の分類一覧が表示されます。あるターゲットで失敗しても残りのターゲットは継続して試行し、いずれかで失敗があれば終了コード 1 で終わります。
+At runtime, each target displays a heading with the target project/repo and a new/update classification list. If one target fails, the remaining targets continue, and the exit code is 1 if any target failed.
 
-> **後方互換**: `projects` / `repos` を定義しない場合は、従来どおり単一の `vercel.project_id` / `github.repo`（および環境変数・`.vercel/project.json` / git remote フォールバック）で 1 ターゲットへ同期します。
+> **Backward compatible**: Without `projects` / `repos`, the tool syncs to a single target using `vercel.project_id` / `github.repo` (plus environment variables / `.vercel/project.json` / git remote fallback) as before.
 
-#### 変数ごとに送信先 Vercel プロジェクトを絞り込む（`vercel_project`）
+#### Per-Variable Vercel Project Targeting (`vercel_project`)
 
-`--vercel-project` フラグは実行全体を 1 プロジェクトに絞りますが、`env-sync.yaml` の各変数で `vercel_project` を指定すると、**変数単位**で送信先 Vercel プロジェクトを `name` で絞り込めます（`vercel.projects[]` の定義が前提）。
+The `--vercel-project` flag narrows the entire run to one project, but you can also specify `vercel_project` on each variable in `env-sync.yaml` to target specific Vercel projects **per variable** by `name` (requires `vercel.projects[]` to be defined).
 
 ```yaml
 # env-sync.yaml
 defaults:
   secret: true
-  # vercel_project: web        # defaults に書くと全変数のデフォルト送信先になる
+  # vercel_project: web        # Setting in defaults makes it the default target for all variables
 
 variables:
-  WEB_API_URL:   { provider: vercel, vercel_project: web }          # web にのみ送る
-  ADMIN_API_URL: { provider: vercel, vercel_project: admin }        # admin にのみ送る
-  SHARED_DB_URL: { provider: vercel, vercel_project: [web, admin] } # web と admin に送る
-  COMMON_KEY:    { provider: vercel }                               # vercel_project 未指定 → 全プロジェクトへ（従来どおり）
+  WEB_API_URL:   { provider: vercel, vercel_project: web }          # Send to web only
+  ADMIN_API_URL: { provider: vercel, vercel_project: admin }        # Send to admin only
+  SHARED_DB_URL: { provider: vercel, vercel_project: [web, admin] } # Send to both web and admin
+  COMMON_KEY:    { provider: vercel }                               # No vercel_project → all projects (backward compatible)
 ```
 
-- **解決優先順位**: 変数個別 `vercel_project` > `defaults.vercel_project`。未指定の変数は解決済みの全 Vercel ターゲットへ送ります（後方互換）。
-- **CLI `--vercel-project` との併用は AND**: CLI で絞り込んだターゲット集合に対し、さらに変数ごとの `vercel_project` でフィルタされます。
-- `vercel_project` に指定する `name` は `vercel.projects[].name` を指します。存在しない `name` を指定するとエラーで停止します。
-- `vercel.projects[]` を定義していない単一解決モードでは `vercel_project` は指定できません（エラーになります）。
+- **Resolution priority**: Per-variable `vercel_project` > `defaults.vercel_project`. Variables without it are sent to all resolved Vercel targets (backward compatible).
+- **Combined with CLI `--vercel-project` (AND logic)**: The CLI narrows the target set first, then per-variable `vercel_project` further filters within that set.
+- The `name` in `vercel_project` refers to `vercel.projects[].name`. Specifying a non-existent `name` causes an error.
+- `vercel_project` cannot be used in single-resolution mode (without `vercel.projects[]` defined) — it will cause an error.
 
-### 使用例
+### Usage Example
 
 ```bash
-# global config (~/.config/env-sync/config.yaml) を作成
+# Create global config (~/.config/env-sync/config.yaml)
 mkdir -p ~/.config/env-sync
 cat > ~/.config/env-sync/config.yaml <<'EOF'
 vercel:
@@ -327,7 +329,7 @@ github:
 EOF
 chmod 0600 ~/.config/env-sync/config.yaml
 
-# project config でプロジェクト固有の ID を上書き
+# Override with project-specific IDs in project config
 cat > .env-sync.config.yaml <<'EOF'
 vercel:
   project_id: prj_xxxxxxxx
@@ -336,35 +338,35 @@ github:
   repo: myorg/myrepo
 EOF
 
-# 環境変数なしで実行
+# Run without environment variables
 env-sync --env .env.production
 ```
 
-### 環境変数参照 `${VAR}` / `${VAR:-default}`
+### Environment Variable References `${VAR}` / `${VAR:-default}`
 
-config の値に環境変数参照を書くことができます（平文トークンを config ファイルに書きたくない場合に便利です）。
+Config values can include environment variable references (useful for avoiding plaintext tokens in config files).
 
-| 記法 | 動作 |
-|------|------|
-| `${VAR}` | 環境変数 `VAR` の値に展開。`VAR` が未設定（空含む）の場合はエラーで中止 |
-| `${VAR:-default}` | `VAR` が設定されていれば `VAR` の値、未設定または空文字なら `default` を使用 |
+| Syntax | Behavior |
+|--------|----------|
+| `${VAR}` | Expands to the value of environment variable `VAR`. Errors if `VAR` is unset (including empty) |
+| `${VAR:-default}` | Uses `VAR`'s value if set; otherwise uses `default` |
 
 ```yaml
 vercel:
-  token: ${MY_VERCEL_TOKEN}          # MY_VERCEL_TOKEN 未設定ならエラー
-  project_id: ${V_PID:-prj_default}  # V_PID 未設定なら prj_default
+  token: ${MY_VERCEL_TOKEN}          # Errors if MY_VERCEL_TOKEN is unset
+  project_id: ${V_PID:-prj_default}  # Falls back to prj_default if V_PID is unset
 github:
   token: ${GH_TOKEN}
   repo: ${GH_REPO:-myorg/myrepo}
 ```
 
-> **注意**: 既存の優先順位「環境変数 > project config > global config」は維持されます。
-> config に `token: ${VERCEL_TOKEN}` と書いても、`VERCEL_TOKEN` 環境変数が設定されていれば直接 env が優先されるため実質同じ値になります。
-> **別名変数**（例: `${MY_VERCEL_TOKEN}`）を使うケースで本機能が活きます。
+> **Note**: The existing priority order "environment variables > project config > global config" is maintained.
+> Even with `token: ${VERCEL_TOKEN}` in config, if the `VERCEL_TOKEN` environment variable is set, the env var takes direct precedence — effectively the same value.
+> This feature is most useful with **aliased variables** (e.g., `${MY_VERCEL_TOKEN}`).
 
-> **セキュリティ**: global config にトークンが含まれていてファイルパーミッションが `0600` でない場合、実行時に stderr へ警告を出力します。`chmod 0600 ~/.config/env-sync/config.yaml` で修正してください。暗号化保存・キーチェーン連携は対象外です（将来検討）。
+> **Security**: If the global config contains tokens and the file permissions are not `0600`, a warning is printed to stderr at runtime. Fix with `chmod 0600 ~/.config/env-sync/config.yaml`. Encrypted storage and keychain integration are out of scope (future consideration).
 
-## 定義ファイル `env-sync.yaml`
+## Definition File `env-sync.yaml`
 
 ```yaml
 defaults:
@@ -376,49 +378,49 @@ variables:
   API_SECRET: { secret: true }
 ```
 
-### スキーマ
+### Schema
 
-| フィールド | 型 | 説明 |
-|---|---|---|
-| `secret` | `bool` | `true`（デフォルト）: シークレット登録 / `false`: 平文登録 |
-| `environments` | `[]string` | 登録先環境の配列。省略すると `defaults.environments` を継承 |
-| `provider` | `string` または `[]string` | 同期先プロバイダー。省略すると `defaults.provider` → CLI `--provider` フラグを使用 |
-| `vercel_project` | `string` または `[]string` | この変数の送信先 Vercel プロジェクト名（`vercel.projects[].name`）。省略すると `defaults.vercel_project` → 全 Vercel ターゲット。詳細は[変数ごとに送信先 Vercel プロジェクトを絞り込む](#変数ごとに送信先-vercel-プロジェクトを絞り込むvercel_project)を参照 |
+| Field | Type | Description |
+|-------|------|-------------|
+| `secret` | `bool` | `true` (default): register as secret / `false`: register as plaintext |
+| `environments` | `[]string` | Array of target environments. Inherits from `defaults.environments` if omitted |
+| `provider` | `string` or `[]string` | Sync target provider. Falls back to `defaults.provider` → CLI `--provider` flag if omitted |
+| `vercel_project` | `string` or `[]string` | Target Vercel project name(s) (`vercel.projects[].name`). Falls back to `defaults.vercel_project` → all Vercel targets. See [Per-Variable Vercel Project Targeting](#per-variable-vercel-project-targeting-vercel_project) for details |
 
-#### Vercel における各フィールドの意味
+#### Field Meanings for Vercel
 
-| `secret` | Vercel type | 説明 |
-|---|---|---|
-| `true` | `sensitive` | 保存後は値を読めないシークレット向け |
-| `false` | `plain` | 暗号化なしの平文 |
+| `secret` | Vercel type | Description |
+|-----------|-------------|-------------|
+| `true` | `sensitive` | For secrets — values cannot be read after saving |
+| `false` | `plain` | Plaintext without encryption |
 
-`environments` には `production` / `preview` / `development` を指定。省略時（空）は `production` と `preview` をデフォルト適用。
+`environments` accepts `production` / `preview` / `development`. Defaults to `production` and `preview` when omitted.
 
-#### GitHub Actions における各フィールドの意味
+#### Field Meanings for GitHub Actions
 
-| `secret` | 登録先 | 説明 |
-|---|---|---|
-| `true` | GitHub Actions Secrets | sealed box 暗号化。登録後は値を閲覧不可 |
-| `false` | GitHub Actions Variables | 平文。値は GitHub UI で確認可能 |
+| `secret` | Target | Description |
+|-----------|--------|-------------|
+| `true` | GitHub Actions Secrets | Sealed-box encrypted. Values cannot be viewed after registration |
+| `false` | GitHub Actions Variables | Plaintext. Values are visible in the GitHub UI |
 
-`environments` に named environment 名を指定すると、その Environment スコープに登録。省略時（空）はリポジトリレベルに登録。
+Specifying a named environment in `environments` registers to that environment scope. When omitted, registers at the repository level.
 
-> **注意**: GitHub の named environment は事前に作成が必要です。存在しない environment 名を指定するとエラーになります。
+> **Note**: GitHub named environments must be pre-created. Specifying a non-existent environment name results in an error.
 
-## オプション / 環境変数
+## Options / Environment Variables
 
-| 項目 | 必須 | 説明 |
-|------|------|------|
-| `--provider <name>` | – | 同期先（デフォルト `vercel`）。現在 `vercel` / `github` が利用可 |
-| `--vercel-project <name>` | – | 同期対象を config の `vercel.projects[].name` 1 件に絞る。未指定なら定義済み全プロジェクト |
-| `--github-repo <name>` | – | 同期対象を config の `github.repos[].name` 1 件に絞る。未指定なら定義済み全リポジトリ |
-| `--env <file>` | – | 値を読む env ファイル（デフォルト `.env`） |
-| `--def <file>` | – | 定義 YAML（デフォルト `env-sync.yaml`） |
-| `--dry-run` | – | 送信せず新規/更新の区別を含む登録予定一覧を表示 |
-| `--yes` / `-y` | – | 更新(上書き)がある場合の確認をスキップ |
-| `--force` | – | `init` 時に既存の def ファイルを上書きする |
-| `VERCEL_TOKEN` | ◯(Vercel) | Vercel アクセストークン（dry-run 時は不要） |
-| `VERCEL_PROJECT_ID` | △(Vercel) | プロジェクト ID。未指定なら config ファイルまたは `.vercel/project.json` から自動取得 |
-| `VERCEL_TEAM_ID` | –(Vercel) | チーム(Org) ID。未指定なら config ファイルまたは `.vercel/project.json` の `orgId` |
-| `GITHUB_TOKEN` | ◯(GitHub) | GitHub アクセストークン（dry-run 時は不要） |
-| `GITHUB_REPO` | –(GitHub) | `owner/repo` 形式。未指定なら config ファイルまたは `git remote origin` から自動取得 |
+| Item | Required | Description |
+|------|----------|-------------|
+| `--provider <name>` | – | Sync target (default `vercel`). Currently `vercel` / `github` are available |
+| `--vercel-project <name>` | – | Filter sync to a single `vercel.projects[].name` from config. All defined projects if unspecified |
+| `--github-repo <name>` | – | Filter sync to a single `github.repos[].name` from config. All defined repos if unspecified |
+| `--env <file>` | – | Env file to read values from (default `.env`) |
+| `--def <file>` | – | Definition YAML (default `env-sync.yaml`) |
+| `--dry-run` | – | Show planned registrations with new/update classification without sending |
+| `--yes` / `-y` | – | Skip confirmation when updates (overwrites) exist |
+| `--force` | – | Overwrite existing def file during `init` |
+| `VERCEL_TOKEN` | Yes (Vercel) | Vercel access token (not required for dry-run) |
+| `VERCEL_PROJECT_ID` | Conditional (Vercel) | Project ID. Auto-detected from config file or `.vercel/project.json` if unset |
+| `VERCEL_TEAM_ID` | – (Vercel) | Team (org) ID. Falls back to config file or `.vercel/project.json` `orgId` |
+| `GITHUB_TOKEN` | Yes (GitHub) | GitHub access token (not required for dry-run) |
+| `GITHUB_REPO` | – (GitHub) | `owner/repo` format. Auto-detected from config file or `git remote origin` if unset |
