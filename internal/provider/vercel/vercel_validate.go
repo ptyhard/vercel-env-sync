@@ -43,9 +43,13 @@ func (v *vercelProvider) Validate(opts provider.Options, _ []provider.Entry) err
 	okCount, ngCount := 0, 0
 
 	for _, tgt := range targets {
+		// name と projectId が両方未設定の場合は "(未設定)" をフォールバックラベルとして使う
 		targetLabel := tgt.ProjectID
 		if tgt.Name != "" {
 			targetLabel = tgt.Name
+		}
+		if targetLabel == "" {
+			targetLabel = i18n.T(i18n.MsgValidateSourceUnset)
 		}
 		fmt.Fprint(stdoutWriter, i18n.T(i18n.MsgValidateHeader, targetLabel))
 
@@ -56,12 +60,12 @@ func (v *vercelProvider) Validate(opts provider.Options, _ []provider.Entry) err
 			fmt.Fprintf(stdoutWriter, "  token     : %s\n", i18n.T(i18n.MsgValidateTokenMasked, vercelSourceLabel(tgt.TokenSource)))
 		}
 
-		// projectId 表示
-		if tgt.ProjectID == "" {
-			fmt.Fprintf(stdoutWriter, "  projectId : %s (%s)\n", i18n.T(i18n.MsgValidateSourceUnset), vercelSourceLabel(tgt.ProjectIDSource))
-		} else {
-			fmt.Fprint(stdoutWriter, i18n.T(i18n.MsgValidateVercelProjectID, tgt.ProjectID, vercelSourceLabel(tgt.ProjectIDSource)))
+		// projectId 表示（設定・未設定いずれも MsgValidateVercelProjectID テンプレートで統一）
+		pid := tgt.ProjectID
+		if pid == "" {
+			pid = i18n.T(i18n.MsgValidateSourceUnset)
 		}
+		fmt.Fprint(stdoutWriter, i18n.T(i18n.MsgValidateVercelProjectID, pid, vercelSourceLabel(tgt.ProjectIDSource)))
 
 		// teamId 表示
 		if tgt.TeamID == "" {

@@ -63,9 +63,9 @@ func (g *githubProvider) Validate(opts provider.Options, entries []provider.Entr
 			fmt.Fprintf(githubStdoutWriter, "  token     : %s\n", i18n.T(i18n.MsgValidateTokenMasked, githubSourceLabel(tgt.TokenSource)))
 		}
 
-		// repo 表示
+		// repo 表示（解決失敗時も MsgValidateGitHubRepo テンプレートで統一し二重カッコを回避）
 		if resolveErr != nil {
-			fmt.Fprintf(githubStdoutWriter, "  repo      : %s (%s)\n", i18n.T(i18n.MsgValidateSourceUnset), githubSourceLabel(repoSrc))
+			fmt.Fprint(githubStdoutWriter, i18n.T(i18n.MsgValidateGitHubRepo, i18n.T(i18n.MsgValidateSourceUnset), githubSourceLabel(repoSrc)))
 			fmt.Fprint(githubStdoutWriter, i18n.T(i18n.MsgValidateRepoUnresolvableSkip))
 			ngCount++
 			continue
