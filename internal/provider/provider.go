@@ -10,6 +10,7 @@ type Options struct {
 	Provider      string
 	VercelProject string // --vercel-project で指定した場合のターゲット名（モノレポ対応）
 	GitHubRepo    string // --github-repo で指定した場合のターゲット名（モノレポ対応）
+	Language      string // --lang で指定した表示言語コード（"en" / "ja"）
 }
 
 // Entry は provider 非依存の共通ドメインモデル。

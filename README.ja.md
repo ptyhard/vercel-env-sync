@@ -424,3 +424,35 @@ variables:
 | `VERCEL_TEAM_ID` | –(Vercel) | チーム(Org) ID。未指定なら config ファイルまたは `.vercel/project.json` の `orgId` |
 | `GITHUB_TOKEN` | ◯(GitHub) | GitHub アクセストークン（dry-run 時は不要） |
 | `GITHUB_REPO` | –(GitHub) | `owner/repo` 形式。未指定なら config ファイルまたは `git remote origin` から自動取得 |
+| `--lang <code>` | – | 表示言語（`en` / `ja`）。デフォルト `en` |
+| `ENV_SYNC_LANG` | – | 表示言語コード（`en` / `ja`）。`--lang` より低優先 |
+
+## 表示言語の設定
+
+CLI メッセージを英語（デフォルト）または日本語で表示できます。
+
+### 優先順位（高い順）
+
+1. `--lang <code>` フラグ
+2. `ENV_SYNC_LANG` 環境変数
+3. config ファイルの `language:` フィールド（`.env-sync.config.yaml` / `~/.config/env-sync/config.yaml`）
+4. デフォルト: `en`
+
+### config ファイルでの設定例
+
+```yaml
+# .env-sync.config.yaml
+language: ja
+vercel:
+  token: ${VERCEL_TOKEN}
+  project_id: <プロジェクト ID>
+```
+
+### 対応言語
+
+| コード | 言語 |
+|--------|------|
+| `en` | 英語（デフォルト） |
+| `ja` | 日本語 |
+
+未対応のコードを指定した場合は `en` にフォールバックします。

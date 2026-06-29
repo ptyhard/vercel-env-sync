@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/ptyhard/env-sync/internal/config"
+	"github.com/ptyhard/env-sync/internal/i18n"
 	"github.com/ptyhard/env-sync/internal/provider"
 )
 
@@ -74,50 +75,50 @@ func (g *gcpProvider) Name() string { return "gcp" }
 func (g *gcpProvider) Sync(opts provider.Options, entries []provider.Entry) error {
 	projectID := os.Getenv("GCP_PROJECT_ID")
 	if projectID == "" {
-		return fmt.Errorf("GCP_PROJECT_ID が未設定です")
+		return fmt.Errorf("%s", i18n.T(i18n.MsgGCPProjectIDMissing))
 	}
 
 	var secretEntries []provider.Entry
 	for _, e := range entries {
 		if !e.Secret {
-			fmt.Printf("⚠ %s: secret=false のためスキップ（Secret Manager は秘匿値専用）\n", e.Key)
+			fmt.Print(i18n.T(i18n.MsgGCPSkipNotSecret, e.Key))
 			continue
 		}
 		secretEntries = append(secretEntries, e)
 	}
 
-	fmt.Printf("対象プロジェクト: %s\n", projectID)
-	fmt.Printf("登録対象 %d 件:\n", len(secretEntries))
+	fmt.Print(i18n.T(i18n.MsgGCPTargetProject, projectID))
+	fmt.Print(i18n.T(i18n.MsgEntriesCount, len(secretEntries)))
 	for _, e := range secretEntries {
 		envsStr := strings.Join(e.Environments, ", ")
 		if envsStr == "" {
-			envsStr = "(labels なし)"
+			envsStr = i18n.T(i18n.MsgGCPLabelsNone)
 		}
 		fmt.Printf("  %s  environments=[%s]\n", e.Key, envsStr)
 	}
 	fmt.Println()
 
 	if len(secretEntries) == 0 {
-		fmt.Println("登録対象がありません")
+		fmt.Println(i18n.T(i18n.MsgNoEntries))
 		return nil
 	}
 
 	if opts.DryRun {
-		fmt.Println("[dry-run] 送信しません")
+		fmt.Println(i18n.T(i18n.MsgDryRun))
 		return nil
 	}
 
 	// ---- 確認プロンプト ----
 	if !opts.Yes {
 		if !config.IsTTY(os.Stdin) {
-			return fmt.Errorf("対話できない環境です。確認をスキップするには --yes を付けてください")
+			return fmt.Errorf("%s", i18n.T(i18n.MsgNonInteractiveErr))
 		}
-		fmt.Print("上記を GCP Secret Manager に同期します（新しいバージョンとして追加）。続行しますか? (y/N) ")
+		fmt.Print(i18n.T(i18n.MsgGCPConfirm))
 		reader := bufio.NewReader(os.Stdin)
 		line, _ := reader.ReadString('\n')
 		ans := strings.ToLower(strings.TrimSpace(line))
 		if ans != "y" && ans != "yes" {
-			fmt.Println("中止しました")
+			fmt.Println(i18n.T(i18n.MsgAborted))
 			return nil
 		}
 	}
@@ -125,7 +126,7 @@ func (g *gcpProvider) Sync(opts provider.Options, entries []provider.Entry) erro
 	ctx := context.Background()
 	client, err := newClientFunc(ctx)
 	if err != nil {
-		return fmt.Errorf("Secret Manager クライアントの作成に失敗: %s", err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgGCPClientCreateFail, err))
 	}
 	defer client.Close() //nolint:errcheck
 
@@ -140,7 +141,7 @@ func (g *gcpProvider) Sync(opts provider.Options, entries []provider.Entry) erro
 		}
 	}
 
-	fmt.Printf("\n完了: 成功 %d / 失敗 %d\n", ok, ng)
+	fmt.Print(i18n.T(i18n.MsgCompleted, ok, ng))
 	if ng > 0 {
 		os.Exit(1)
 	}
@@ -161,7 +162,7 @@ func syncSecret(ctx context.Context, client secretManagerClient, projectID strin
 	if err != nil {
 		st, ok := status.FromError(err)
 		if !ok || st.Code() != codes.NotFound {
-			return fmt.Errorf("Secret の取得に失敗: %s", err)
+			return fmt.Errorf("%s", i18n.T(i18n.MsgGCPSecretGetFail, err))
 		}
 		// 存在しない場合は新規作成
 		secret := &secretmanagerpb.Secret{
@@ -179,7 +180,7 @@ func syncSecret(ctx context.Context, client secretManagerClient, projectID strin
 		}); createErr != nil {
 			// 競合（別プロセスが同時に作成した場合）は無視してバージョン追加へ進む
 			if cst, ok2 := status.FromError(createErr); !ok2 || cst.Code() != codes.AlreadyExists {
-				return fmt.Errorf("Secret の作成に失敗: %s", createErr)
+				return fmt.Errorf("%s", i18n.T(i18n.MsgGCPSecretCreateFail, createErr))
 			}
 		}
 	} else if len(labels) > 0 {
@@ -191,7 +192,7 @@ func syncSecret(ctx context.Context, client secretManagerClient, projectID strin
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
 		}); err != nil {
-			return fmt.Errorf("Secret のラベル更新に失敗: %s", err)
+			return fmt.Errorf("%s", i18n.T(i18n.MsgGCPSecretLabelUpdateFail, err))
 		}
 	}
 
@@ -199,7 +200,7 @@ func syncSecret(ctx context.Context, client secretManagerClient, projectID strin
 		Parent:  secretName,
 		Payload: &secretmanagerpb.SecretPayload{Data: []byte(e.Value)},
 	}); err != nil {
-		return fmt.Errorf("Secret バージョンの追加に失敗: %s", err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgGCPSecretVersionAddFail, err))
 	}
 
 	return nil

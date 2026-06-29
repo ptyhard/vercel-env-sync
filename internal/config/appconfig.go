@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/ptyhard/env-sync/internal/i18n"
 )
 
 // envRefRe は ${VAR} または ${VAR:-default} にマッチする正規表現。
@@ -20,8 +22,9 @@ const projectAppConfigFile = ".env-sync.config.yaml"
 
 // AppConfig は global / project の config ファイルからロードした認証情報・ID を保持する。
 type AppConfig struct {
-	Vercel AppVercelConfig `yaml:"vercel"`
-	GitHub AppGitHubConfig `yaml:"github"`
+	Vercel   AppVercelConfig `yaml:"vercel"`
+	GitHub   AppGitHubConfig `yaml:"github"`
+	Language string          `yaml:"language"` // 表示言語コード（"en" / "ja"）
 }
 
 // VercelProjectConf は vercel.projects の 1 件分の設定。
@@ -148,11 +151,11 @@ func readAppConfigFile(path string) (AppConfig, error) {
 		return AppConfig{}, nil
 	}
 	if err != nil {
-		return AppConfig{}, fmt.Errorf("config ファイルの読み込みに失敗 (%s): %w", path, err)
+		return AppConfig{}, fmt.Errorf("%s: %w", i18n.T(i18n.MsgConfigReadFail, path), err)
 	}
 	var cfg AppConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return AppConfig{}, fmt.Errorf("config ファイルの YAML パースに失敗 (%s): %w", path, err)
+		return AppConfig{}, fmt.Errorf("%s: %w", i18n.T(i18n.MsgConfigYAMLFail, path), err)
 	}
 	return cfg, nil
 }
@@ -182,6 +185,9 @@ func mergeAppConfig(global, project AppConfig) AppConfig {
 	if len(project.GitHub.Repos) > 0 {
 		merged.GitHub.Repos = project.GitHub.Repos
 	}
+	if project.Language != "" {
+		merged.Language = project.Language
+	}
 	return merged
 }
 
@@ -200,7 +206,7 @@ func expandEnvRefs(s string) (string, error) {
 			varName := inner[:idx]
 			if varName == "" {
 				// 変数名が空の場合はタイポとして unresolved 扱い
-				unresolved = append(unresolved, "(空の変数名)")
+				unresolved = append(unresolved, i18n.T(i18n.MsgConfigEmptyVarName))
 				return match
 			}
 			defaultVal := inner[idx+2:]
@@ -216,7 +222,7 @@ func expandEnvRefs(s string) (string, error) {
 		return match
 	})
 	if len(unresolved) > 0 {
-		return "", fmt.Errorf("config で参照された環境変数が未設定または書式不正です: %s", strings.Join(unresolved, ", "))
+		return "", fmt.Errorf("%s", i18n.T(i18n.MsgConfigEnvRefUnset, strings.Join(unresolved, ", ")))
 	}
 	return result, nil
 }
@@ -275,9 +281,7 @@ func warnIfInsecurePermissions(path string) {
 		return
 	}
 	if info.Mode().Perm() != 0600 {
-		fmt.Fprintf(os.Stderr,
-			"警告: %s にトークンが含まれていますがパーミッションが %04o です。`chmod 0600 %s` で修正することを推奨します\n",
-			path, info.Mode().Perm(), path)
+		fmt.Fprint(os.Stderr, i18n.T(i18n.MsgConfigPermWarning, path, info.Mode().Perm(), path))
 	}
 }
 
@@ -357,7 +361,7 @@ func (cfg *AppConfig) ResolveVercelTargets(selectName string) ([]VercelTarget, e
 	if len(cfg.Vercel.Projects) == 0 {
 		// selectName が指定されているのに projects が未定義は設定ミスのためエラー
 		if selectName != "" {
-			return nil, fmt.Errorf("--vercel-project が指定されましたが config に vercel.projects が定義されていません")
+			return nil, fmt.Errorf("%s", i18n.T(i18n.MsgVercelProjectsNotDefined))
 		}
 		// 後方互換: 従来の単一解決
 		return []VercelTarget{
@@ -390,7 +394,7 @@ func (cfg *AppConfig) ResolveVercelTargets(selectName string) ([]VercelTarget, e
 	}
 
 	if selectName != "" && len(targets) == 0 {
-		return nil, fmt.Errorf("指定されたプロジェクト名 %q が config に定義されていません", selectName)
+		return nil, fmt.Errorf("%s", i18n.T(i18n.MsgVercelProjectNameNotFound, selectName))
 	}
 	return targets, nil
 }
@@ -402,14 +406,14 @@ func validateVercelProjectConfs(projects []VercelProjectConf) error {
 	seen := make(map[string]bool, len(projects))
 	for _, p := range projects {
 		if p.Name == "" {
-			return fmt.Errorf("vercel.projects の各エントリには name が必須です")
+			return fmt.Errorf("%s", i18n.T(i18n.MsgVercelProjectNameRequired))
 		}
 		if seen[p.Name] {
-			return fmt.Errorf("vercel.projects の name %q が重複しています", p.Name)
+			return fmt.Errorf("%s", i18n.T(i18n.MsgVercelProjectNameDuplicate, p.Name))
 		}
 		seen[p.Name] = true
 		if p.ProjectID == "" {
-			return fmt.Errorf("vercel.projects のエントリ %q には project_id が必須です", p.Name)
+			return fmt.Errorf("%s", i18n.T(i18n.MsgVercelProjectIDRequired, p.Name))
 		}
 	}
 	return nil
@@ -424,7 +428,7 @@ func (cfg *AppConfig) ResolveGitHubTargets(selectName string) ([]GitHubTarget, e
 	if len(cfg.GitHub.Repos) == 0 {
 		// selectName が指定されているのに repos が未定義は設定ミスのためエラー
 		if selectName != "" {
-			return nil, fmt.Errorf("--github-repo が指定されましたが config に github.repos が定義されていません")
+			return nil, fmt.Errorf("%s", i18n.T(i18n.MsgGitHubReposNotDefined))
 		}
 		// 後方互換: 従来の単一解決
 		return []GitHubTarget{
@@ -455,7 +459,7 @@ func (cfg *AppConfig) ResolveGitHubTargets(selectName string) ([]GitHubTarget, e
 	}
 
 	if selectName != "" && len(targets) == 0 {
-		return nil, fmt.Errorf("指定されたリポジトリ名 %q が config に定義されていません", selectName)
+		return nil, fmt.Errorf("%s", i18n.T(i18n.MsgGitHubRepoNameNotFound, selectName))
 	}
 	return targets, nil
 }
@@ -467,14 +471,14 @@ func validateGitHubRepoConfs(repos []GitHubRepoConf) error {
 	seen := make(map[string]bool, len(repos))
 	for _, r := range repos {
 		if r.Name == "" {
-			return fmt.Errorf("github.repos の各エントリには name が必須です")
+			return fmt.Errorf("%s", i18n.T(i18n.MsgGitHubRepoNameRequired))
 		}
 		if seen[r.Name] {
-			return fmt.Errorf("github.repos の name %q が重複しています", r.Name)
+			return fmt.Errorf("%s", i18n.T(i18n.MsgGitHubRepoNameDuplicate, r.Name))
 		}
 		seen[r.Name] = true
 		if r.Repo == "" {
-			return fmt.Errorf("github.repos のエントリ %q には repo が必須です", r.Name)
+			return fmt.Errorf("%s", i18n.T(i18n.MsgGitHubRepoRepoRequired, r.Name))
 		}
 	}
 	return nil

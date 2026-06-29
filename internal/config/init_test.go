@@ -84,7 +84,8 @@ func TestBuildInitYAML_ContainsVariablesSection(t *testing.T) {
 
 func TestBuildInitYAML_ContainsWarningComment(t *testing.T) {
 	out := config.BuildInitYAML([]string{"FOO"})
-	if !strings.Contains(out, "雛形") || !strings.Contains(out, "見直す") {
+	// "!!" は en/ja 両カタログの注意コメントに共通して含まれる
+	if !strings.Contains(out, "!!") || !strings.Contains(out, "secret") {
 		t.Errorf("注意コメントが含まれていない:\n%s", out)
 	}
 }
@@ -207,7 +208,8 @@ func TestRunInit_OverwriteProtection(t *testing.T) {
 	if err == nil {
 		t.Fatal("--force なしで既存ファイルが上書きされてしまった（エラーが返らなかった）")
 	}
-	if !strings.Contains(err.Error(), "上書きするには --force") {
+	// "--force" は en/ja 両カタログのファイル存在エラーに共通して含まれる
+	if !strings.Contains(err.Error(), "--force") {
 		t.Errorf("エラーメッセージが想定と異なる: %v", err)
 	}
 

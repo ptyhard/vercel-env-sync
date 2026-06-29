@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ptyhard/env-sync/internal/config"
+	"github.com/ptyhard/env-sync/internal/i18n"
 	"github.com/ptyhard/env-sync/internal/provider"
 )
 
@@ -23,7 +24,7 @@ func ResolveEntries(def config.Definition, envVars map[string]string, defKeys []
 		for _, p := range def.Defaults.Provider.Values {
 			if trimmed := strings.TrimSpace(p); trimmed != "" && !provider.IsRegisteredProvider(trimmed) {
 				names := strings.Join(provider.RegisteredProviderNames(), " / ")
-				return nil, fmt.Errorf("defaults.provider: 不正な provider 値 %q（%s のいずれかを指定してください）", trimmed, names)
+				return nil, fmt.Errorf("%s", i18n.T(i18n.MsgDefaultsProviderInvalid, trimmed, names))
 			}
 		}
 	}
@@ -64,14 +65,14 @@ func ResolveEntries(def config.Definition, envVars map[string]string, defKeys []
 		if def.Defaults.Provider != nil {
 			if len(def.Defaults.Provider.Values) == 0 {
 				names := strings.Join(provider.RegisteredProviderNames(), " / ")
-				return nil, fmt.Errorf("defaults.provider に空配列が指定されています（%s のいずれかを指定してください）", names)
+				return nil, fmt.Errorf("%s", i18n.T(i18n.MsgDefaultsProviderEmpty, names))
 			}
 			providers = def.Defaults.Provider.Values
 		}
 		if conf.Provider != nil {
 			if len(conf.Provider.Values) == 0 {
 				names := strings.Join(provider.RegisteredProviderNames(), " / ")
-				return nil, fmt.Errorf("%s: provider に空配列が指定されています（%s のいずれかを指定してください）", key, names)
+				return nil, fmt.Errorf("%s", i18n.T(i18n.MsgVarProviderEmpty, key, names))
 			}
 			providers = conf.Provider.Values
 		}
@@ -83,14 +84,14 @@ func ResolveEntries(def config.Definition, envVars map[string]string, defKeys []
 		// dedup 後に空になった場合（例: provider: " "）は設定ミスとしてエラー
 		if len(providers) == 0 {
 			names := strings.Join(provider.RegisteredProviderNames(), " / ")
-			return nil, fmt.Errorf("%s: provider の指定が空または空白のみです（%s のいずれかを指定してください）", key, names)
+			return nil, fmt.Errorf("%s", i18n.T(i18n.MsgVarProviderBlank, key, names))
 		}
 
 		// provider 値の検証
 		for _, p := range providers {
 			if !provider.IsRegisteredProvider(p) {
 				names := strings.Join(provider.RegisteredProviderNames(), " / ")
-				return nil, fmt.Errorf("%s: 不正な provider 値 %q（%s のいずれかを指定してください）", key, p, names)
+				return nil, fmt.Errorf("%s", i18n.T(i18n.MsgVarProviderInvalid, key, p, names))
 			}
 		}
 

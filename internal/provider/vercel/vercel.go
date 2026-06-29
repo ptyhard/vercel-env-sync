@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ptyhard/env-sync/internal/config"
+	"github.com/ptyhard/env-sync/internal/i18n"
 	"github.com/ptyhard/env-sync/internal/provider"
 )
 
@@ -44,7 +45,7 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		return err
 	}
 	if !opts.DryRun && appCfg.ResolveVercelToken() == "" && len(appCfg.Vercel.Projects) == 0 {
-		return fmt.Errorf("VERCEL_TOKEN が未設定です（環境変数 VERCEL_TOKEN または config ファイルの vercel.token で指定してください）")
+		return fmt.Errorf("%s", i18n.T(i18n.MsgVercelTokenMissing))
 	}
 
 	// ---- ターゲット解決 ----
@@ -76,12 +77,12 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	if len(targets) == 1 && targets[0].ProjectID == "" {
 		pjText, err := os.ReadFile(".vercel/project.json")
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf(".vercel/project.json の読み込みに失敗: %s", err)
+			return fmt.Errorf("%s", i18n.T(i18n.MsgVercelProjectJSONReadFail, err))
 		}
 		if err == nil {
 			var pj projectJSON
 			if err := json.Unmarshal(pjText, &pj); err != nil {
-				return fmt.Errorf(".vercel/project.json の JSON パースに失敗: %s", err)
+				return fmt.Errorf("%s", i18n.T(i18n.MsgVercelProjectJSONParseFail, err))
 			}
 			targets[0].ProjectID = pj.ProjectID
 			if targets[0].TeamID == "" {
@@ -89,7 +90,7 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 			}
 		}
 		if targets[0].ProjectID == "" {
-			return fmt.Errorf("VERCEL_PROJECT_ID が未設定で .vercel/project.json もありません（先に vercel link するか指定してください）")
+			return fmt.Errorf("%s", i18n.T(i18n.MsgVercelProjectIDMissing))
 		}
 	}
 	// ---- 各ターゲットに対して一覧表示と分類（dry-run も同様）----
@@ -104,10 +105,10 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		// 単一ターゲット時は即エラー返却。複数ターゲット時は失敗として記録して残りを継続する。
 		if !opts.DryRun && tgt.Token == "" {
 			if len(targets) == 1 {
-				return fmt.Errorf("VERCEL_TOKEN が未設定です（プロジェクト %q: 環境変数 VERCEL_TOKEN または config ファイルの token で指定してください）", tgt.Name)
+				return fmt.Errorf("%s", i18n.T(i18n.MsgVercelTokenMissingProject, tgt.Name))
 			}
 			tokenMissing[i] = true
-			fmt.Fprintf(os.Stderr, "✗ プロジェクト %q: VERCEL_TOKEN が未設定です（このターゲットをスキップして残りを継続します）\n", tgt.Name)
+			fmt.Fprint(os.Stderr, i18n.T(i18n.MsgVercelTokenSkipProject, tgt.Name))
 			continue
 		}
 
@@ -120,7 +121,7 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 			} else {
 				// API 失敗時は classified = nil のまま（確認スキップしない安全側フォールバック）。
 				// 黙って分類をスキップすると新規/更新表示が出ない理由が分からないため警告を出す。
-				fmt.Fprintf(os.Stderr, "警告: 既存 key の取得に失敗したため新規/更新の分類をスキップします: %s\n", err)
+				fmt.Fprint(os.Stderr, i18n.T(i18n.MsgVercelExistingKeysFetchWarn, err))
 			}
 		}
 		perTargetClassified[i] = classified
@@ -130,12 +131,12 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		if tgt.Name != "" {
 			targetLabel = tgt.Name + " (" + tgt.ProjectID + ")"
 		}
-		fmt.Printf("対象プロジェクト: %s  (env: %s, def: %s)\n", targetLabel, opts.Env, opts.Def)
+		fmt.Print(i18n.T(i18n.MsgVercelTargetProject, targetLabel, opts.Env, opts.Def))
 		newCount, updateCount := countClassified(classified, len(items))
 		if classified != nil {
-			fmt.Printf("登録対象 %d 件 (新規 %d 件 / 更新 %d 件):\n", len(items), newCount, updateCount)
+			fmt.Print(i18n.T(i18n.MsgEntriesClassified, len(items), newCount, updateCount))
 		} else {
-			fmt.Printf("登録対象 %d 件 (既存は upsert で上書き):\n", len(items))
+			fmt.Print(i18n.T(i18n.MsgVercelEntriesUpsert, len(items)))
 		}
 		for j, it := range items {
 			tj, _ := json.Marshal(it.Target)
@@ -144,9 +145,9 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 				secretLabel = "secret=false"
 			}
 			if classified != nil {
-				marker, label := "⟳", "更新"
+				marker, label := "⟳", i18n.T(i18n.MsgLabelUpdate)
 				if classified[j].isNew {
-					marker, label = "+", "新規"
+					marker, label = "+", i18n.T(i18n.MsgLabelNew)
 				}
 				fmt.Printf("  %s %-30s (%s) environments=%s [%s]\n", marker, it.Key, secretLabel, string(tj), label)
 			} else {
@@ -161,11 +162,11 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		totalItems += len(items)
 	}
 	if totalItems == 0 {
-		fmt.Println("登録対象がありません")
+		fmt.Println(i18n.T(i18n.MsgNoEntries))
 		return nil
 	}
 	if opts.DryRun {
-		fmt.Println("[dry-run] 送信しません")
+		fmt.Println(i18n.T(i18n.MsgDryRun))
 		return nil
 	}
 
@@ -195,18 +196,18 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	}
 	if needsConfirm && !opts.Yes {
 		if !config.IsTTY(os.Stdin) {
-			return fmt.Errorf("対話できない環境です。確認をスキップするには --yes を付けてください")
+			return fmt.Errorf("%s", i18n.T(i18n.MsgNonInteractiveErr))
 		}
 		if activeCount > 1 {
-			fmt.Printf("上記を Vercel の %d プロジェクトに登録します（既存は上書き）。続行しますか? (y/N) ", activeCount)
+			fmt.Print(i18n.T(i18n.MsgVercelConfirmMulti, activeCount))
 		} else {
-			fmt.Print("上記を Vercel に登録します（既存は上書き）。続行しますか? (y/N) ")
+			fmt.Print(i18n.T(i18n.MsgVercelConfirmSingle))
 		}
 		reader := bufio.NewReader(os.Stdin)
 		line, _ := reader.ReadString('\n')
 		ans := strings.ToLower(strings.TrimSpace(line))
 		if ans != "y" && ans != "yes" {
-			fmt.Println("中止しました")
+			fmt.Println(i18n.T(i18n.MsgAborted))
 			return nil
 		}
 	}
@@ -225,7 +226,7 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 			targetLabel = tgt.Name
 		}
 		if activeCount > 1 {
-			fmt.Printf("\n--- プロジェクト: %s ---\n", targetLabel)
+			fmt.Print(i18n.T(i18n.MsgVercelProjectSeparator, targetLabel))
 		}
 		ok, ng := syncOneVercelTarget(client, tgt.Token, tgt.ProjectID, tgt.TeamID, perTargetItems[i])
 		totalOK += ok
@@ -233,9 +234,9 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	}
 
 	if activeCount > 1 {
-		fmt.Printf("\n全体完了: 成功 %d / 失敗 %d\n", totalOK, totalNG)
+		fmt.Print(i18n.T(i18n.MsgTotalCompleted, totalOK, totalNG))
 	} else {
-		fmt.Printf("\n完了: 成功 %d / 失敗 %d\n", totalOK, totalNG)
+		fmt.Print(i18n.T(i18n.MsgCompleted, totalOK, totalNG))
 	}
 	if totalNG > 0 {
 		os.Exit(1)
@@ -270,7 +271,7 @@ func validateEntryVercelProjects(entries []provider.Entry, projects []config.Ver
 	if len(projects) == 0 {
 		for _, e := range entries {
 			if len(e.VercelProjects) > 0 {
-				return fmt.Errorf("%s: vercel_project が指定されていますが config に vercel.projects が定義されていません（vercel_project は vercel.projects[] と組み合わせて使用してください）", e.Key)
+				return fmt.Errorf("%s", i18n.T(i18n.MsgVercelProjectNotDefined, e.Key))
 			}
 		}
 		return nil
@@ -286,7 +287,7 @@ func validateEntryVercelProjects(entries []provider.Entry, projects []config.Ver
 				for _, p := range projects {
 					names = append(names, p.Name)
 				}
-				return fmt.Errorf("%s: vercel_project %q は config の vercel.projects に存在しません（定義済み: %s）", e.Key, vp, strings.Join(names, ", "))
+				return fmt.Errorf("%s", i18n.T(i18n.MsgVercelProjectInvalidConfig, e.Key, vp, strings.Join(names, ", ")))
 			}
 		}
 	}
@@ -298,7 +299,7 @@ func validateEntryVercelProjects(entries []provider.Entry, projects []config.Ver
 func syncOneVercelTarget(client *http.Client, token, projectID, teamID string, items []item) (ok, ng int) {
 	u, err := url.Parse(fmt.Sprintf("%s/v10/projects/%s/env", apiBase, projectID))
 	if err != nil {
-		fmt.Printf("✗ URL の組み立てに失敗: %s\n", err)
+		fmt.Print(i18n.T(i18n.MsgVercelURLBuildFailOut, err))
 		return 0, len(items)
 	}
 	q := u.Query()
@@ -312,7 +313,7 @@ func syncOneVercelTarget(client *http.Client, token, projectID, teamID string, i
 		body, _ := json.Marshal(it)
 		req, err := http.NewRequest(http.MethodPost, u.String(), bytes.NewReader(body))
 		if err != nil {
-			fmt.Printf("✗ %s -> リクエスト生成失敗: %s\n", it.Key, err)
+			fmt.Print(i18n.T(i18n.MsgVercelRequestCreateFailOut, it.Key, err))
 			ng++
 			continue
 		}
@@ -321,7 +322,7 @@ func syncOneVercelTarget(client *http.Client, token, projectID, teamID string, i
 
 		res, err := client.Do(req)
 		if err != nil {
-			fmt.Printf("✗ %s -> 送信失敗: %s\n", it.Key, err)
+			fmt.Print(i18n.T(i18n.MsgVercelSendFailOut, it.Key, err))
 			ng++
 			continue
 		}
@@ -352,7 +353,7 @@ type classifiedVercelItem struct {
 func vercelFetchExistingKeys(client *http.Client, token, projectID, teamID string) (map[string]bool, error) {
 	u, err := url.Parse(fmt.Sprintf("%s/v10/projects/%s/env", apiBase, projectID))
 	if err != nil {
-		return nil, fmt.Errorf("URL 組み立て失敗: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgVercelURLBuildFailInternal), err)
 	}
 	q := u.Query()
 	if teamID != "" {
@@ -362,13 +363,13 @@ func vercelFetchExistingKeys(client *http.Client, token, projectID, teamID strin
 
 	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("リクエスト生成失敗: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestCreateFail), err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	res, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("既存 key 取得失敗: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgVercelExistingKeyFetchFail), err)
 	}
 	defer res.Body.Close()
 
@@ -377,7 +378,7 @@ func vercelFetchExistingKeys(client *http.Client, token, projectID, teamID strin
 		if detail := parseErrorBody(res.Body); detail != "" {
 			msg += ": " + detail
 		}
-		return nil, fmt.Errorf("既存 key 取得失敗: %s", msg)
+		return nil, fmt.Errorf("%s: %s", i18n.T(i18n.MsgVercelExistingKeyFetchFail), msg)
 	}
 
 	var resp struct {
@@ -386,7 +387,7 @@ func vercelFetchExistingKeys(client *http.Client, token, projectID, teamID strin
 		} `json:"envs"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
-		return nil, fmt.Errorf("既存 key レスポンスのパース失敗: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgVercelExistingKeyParseFail), err)
 	}
 
 	existing := make(map[string]bool, len(resp.Envs))
@@ -446,7 +447,7 @@ func entriesToVercelItems(entries []provider.Entry) ([]item, error) {
 
 		for _, t := range target {
 			if !validTargets[t] {
-				return nil, fmt.Errorf("%s: 不正な environments %q（production / preview / development）", e.Key, t)
+				return nil, fmt.Errorf("%s", i18n.T(i18n.MsgVercelInvalidEnvironment, e.Key, t))
 			}
 		}
 

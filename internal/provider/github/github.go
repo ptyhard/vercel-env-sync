@@ -19,6 +19,7 @@ import (
 	"golang.org/x/crypto/nacl/box"
 
 	"github.com/ptyhard/env-sync/internal/config"
+	"github.com/ptyhard/env-sync/internal/i18n"
 	"github.com/ptyhard/env-sync/internal/provider"
 )
 
@@ -79,7 +80,7 @@ func classifyGitHubTasksByExistence(tasks []githubTask, exists func(t githubTask
 			if scope == "" {
 				scope = "repo"
 			}
-			return nil, fmt.Errorf("%s (env: %s): 存在確認失敗: %w", t.entry.Key, scope, err)
+			return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgGitHubExistCheckTaskFail, t.entry.Key, scope), err)
 		}
 		result[i] = githubClassifiedTask{task: t, isNew: !found}
 	}
@@ -121,7 +122,7 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		return err
 	}
 	if !opts.DryRun && appCfg.ResolveGitHubToken() == "" && len(appCfg.GitHub.Repos) == 0 {
-		return fmt.Errorf("GITHUB_TOKEN が未設定です（環境変数 GITHUB_TOKEN または config ファイルの github.token で指定してください）")
+		return fmt.Errorf("%s", i18n.T(i18n.MsgGitHubTokenMissing))
 	}
 
 	// ---- ターゲット解決 ----
@@ -157,9 +158,9 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		targetToken := tgt.Token
 		if !opts.DryRun && targetToken == "" {
 			if len(targets) == 1 {
-				return fmt.Errorf("GITHUB_TOKEN が未設定です（リポジトリ %q: 環境変数 GITHUB_TOKEN または config ファイルの token で指定してください）", tgt.Name)
+				return fmt.Errorf("%s", i18n.T(i18n.MsgGitHubTokenMissingRepo, tgt.Name))
 			}
-			fmt.Fprintf(os.Stderr, "✗ リポジトリ %q: GITHUB_TOKEN が未設定です（このターゲットをスキップして残りを継続します）\n", tgt.Name)
+			fmt.Fprint(os.Stderr, i18n.T(i18n.MsgGitHubTokenSkipRepo, tgt.Name))
 			resolved = append(resolved, resolvedTarget{owner: ownerStr, repo: repoStr, skipped: true})
 			continue
 		}
@@ -172,18 +173,18 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 				classified = cls
 			} else {
 				// API 失敗時は classified = nil のまま（安全側フォールバック）。
-				fmt.Fprintf(os.Stderr, "警告: 既存の存在確認に失敗したため新規/更新の分類をスキップします: %s\n", err)
+				fmt.Fprint(os.Stderr, i18n.T(i18n.MsgGitHubExistingCheckWarn, err))
 			}
 		}
 		resolved = append(resolved, resolvedTarget{owner: ownerStr, repo: repoStr, token: targetToken, classified: classified})
 
 		// 一覧表示
-		fmt.Printf("対象リポジトリ: %s/%s\n", ownerStr, repoStr)
+		fmt.Print(i18n.T(i18n.MsgGitHubTargetRepo, ownerStr, repoStr))
 		newCount, updateCount := countGitHubClassified(classified, len(tasks))
 		if classified != nil {
-			fmt.Printf("登録対象 %d 件 (新規 %d 件 / 更新 %d 件):\n", len(tasks), newCount, updateCount)
+			fmt.Print(i18n.T(i18n.MsgEntriesClassified, len(tasks), newCount, updateCount))
 		} else {
-			fmt.Printf("登録対象 %d 件:\n", len(tasks))
+			fmt.Print(i18n.T(i18n.MsgEntriesCount, len(tasks)))
 		}
 		for i, t := range tasks {
 			kind := "Secret"
@@ -195,9 +196,9 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 				scope = "repo"
 			}
 			if classified != nil {
-				marker, label := "⟳", "更新"
+				marker, label := "⟳", i18n.T(i18n.MsgLabelUpdate)
 				if classified[i].isNew {
-					marker, label = "+", "新規"
+					marker, label = "+", i18n.T(i18n.MsgLabelNew)
 				}
 				fmt.Printf("  %s %s (env: %s, %s) [%s]\n", marker, t.entry.Key, scope, kind, label)
 			} else {
@@ -208,11 +209,11 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	}
 
 	if len(tasks) == 0 {
-		fmt.Println("登録対象がありません")
+		fmt.Println(i18n.T(i18n.MsgNoEntries))
 		return nil
 	}
 	if opts.DryRun {
-		fmt.Println("[dry-run] 送信しません")
+		fmt.Println(i18n.T(i18n.MsgDryRun))
 		return nil
 	}
 
@@ -241,18 +242,18 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	}
 	if needsConfirm && !opts.Yes {
 		if !config.IsTTY(os.Stdin) {
-			return fmt.Errorf("対話できない環境です。確認をスキップするには --yes を付けてください")
+			return fmt.Errorf("%s", i18n.T(i18n.MsgNonInteractiveErr))
 		}
 		if activeResolved > 1 {
-			fmt.Printf("上記を GitHub の %d リポジトリに登録します（既存は上書き）。続行しますか? (y/N) ", activeResolved)
+			fmt.Print(i18n.T(i18n.MsgGitHubConfirmMulti, activeResolved))
 		} else {
-			fmt.Print("上記を GitHub に登録します。続行しますか? (y/N) ")
+			fmt.Print(i18n.T(i18n.MsgGitHubConfirmSingle))
 		}
 		reader := bufio.NewReader(os.Stdin)
 		line, _ := reader.ReadString('\n')
 		ans := strings.ToLower(strings.TrimSpace(line))
 		if ans != "y" && ans != "yes" {
-			fmt.Println("中止しました")
+			fmt.Println(i18n.T(i18n.MsgAborted))
 			return nil
 		}
 	}
@@ -267,7 +268,7 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 			continue
 		}
 		if activeResolved > 1 {
-			fmt.Printf("\n--- リポジトリ: %s/%s ---\n", r.owner, r.repo)
+			fmt.Print(i18n.T(i18n.MsgGitHubRepoSeparator, r.owner, r.repo))
 		}
 		ok, ng := syncOneGitHubTarget(client, r.token, r.owner, r.repo, tasks, r.classified)
 		totalOK += ok
@@ -275,9 +276,9 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	}
 
 	if activeResolved > 1 {
-		fmt.Printf("\n全体完了: 成功 %d / 失敗 %d\n", totalOK, totalNG)
+		fmt.Print(i18n.T(i18n.MsgTotalCompleted, totalOK, totalNG))
 	} else {
-		fmt.Printf("\n完了: 成功 %d / 失敗 %d\n", totalOK, totalNG)
+		fmt.Print(i18n.T(i18n.MsgCompleted, totalOK, totalNG))
 	}
 	if totalNG > 0 {
 		os.Exit(1)
@@ -292,7 +293,7 @@ func resolveOwnerRepo(tgt config.GitHubTarget, appCfg *config.AppConfig) (owner,
 	if repoStr != "" {
 		parts := strings.Split(repoStr, "/")
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return "", "", fmt.Errorf("リポジトリの形式が不正です（owner/repo 形式で指定してください）: %q", repoStr)
+			return "", "", fmt.Errorf("%s", i18n.T(i18n.MsgGitHubRepoFormatInvalid, repoStr))
 		}
 		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
 	}
@@ -319,7 +320,7 @@ func syncOneGitHubTarget(client *http.Client, token, owner, repo string, tasks [
 			if !hit {
 				keyID, pubKey, e := githubPublicKey(client, token, owner, repo, t.envScope)
 				if e != nil {
-					fmt.Printf("✗ %s -> 公開鍵取得失敗: %s\n", t.entry.Key, e)
+					fmt.Print(i18n.T(i18n.MsgGitHubPublicKeyFetchFailOut, t.entry.Key, e))
 					ngCount++
 					continue
 				}
@@ -329,7 +330,7 @@ func syncOneGitHubTarget(client *http.Client, token, owner, repo string, tasks [
 			// 暗号化
 			encrypted, e := encryptSecret(t.entry.Value, cached.key)
 			if e != nil {
-				fmt.Printf("✗ %s -> 暗号化失敗: %s\n", t.entry.Key, e)
+				fmt.Print(i18n.T(i18n.MsgGitHubEncryptFailOut, t.entry.Key, e))
 				ngCount++
 				continue
 			}
@@ -348,7 +349,7 @@ func syncOneGitHubTarget(client *http.Client, token, owner, repo string, tasks [
 					if scope == "" {
 						scope = "repo"
 					}
-					fmt.Printf("✗ %s (env: %s) -> 存在確認失敗: %s\n", t.entry.Key, scope, e)
+					fmt.Print(i18n.T(i18n.MsgGitHubExistCheckFailOut, t.entry.Key, scope, e))
 					ngCount++
 					continue
 				}
@@ -385,12 +386,12 @@ func resolveGitHubRepo(appCfg *config.AppConfig) (owner, repo string, err error)
 	if repoEnv != "" {
 		parts := strings.Split(repoEnv, "/")
 		if len(parts) != 2 {
-			return "", "", fmt.Errorf("GITHUB_REPO の形式が不正です（owner/repo 形式で指定してください）")
+			return "", "", fmt.Errorf("%s", i18n.T(i18n.MsgGitHubRepoEnvInvalid))
 		}
 		owner := strings.TrimSpace(parts[0])
 		repo := strings.TrimSpace(parts[1])
 		if owner == "" || repo == "" {
-			return "", "", fmt.Errorf("GITHUB_REPO の形式が不正です（owner/repo 形式で指定してください）")
+			return "", "", fmt.Errorf("%s", i18n.T(i18n.MsgGitHubRepoEnvInvalid))
 		}
 		return owner, repo, nil
 	}
@@ -398,7 +399,7 @@ func resolveGitHubRepo(appCfg *config.AppConfig) (owner, repo string, err error)
 	// git remote から取得
 	o, r, ok := repoFromGitRemote()
 	if !ok {
-		return "", "", fmt.Errorf("GITHUB_REPO を指定してください（git remote origin が GitHub でないか、git が使えません）")
+		return "", "", fmt.Errorf("%s", i18n.T(i18n.MsgGitHubRepoRequired))
 	}
 	return o, r, nil
 }
@@ -453,7 +454,7 @@ func parseGitHubRemoteURL(rawURL string) (owner, repo string, ok bool) {
 func encryptSecret(value string, pubKey *[32]byte) (string, error) {
 	encrypted, err := box.SealAnonymous(nil, []byte(value), pubKey, rand.Reader)
 	if err != nil {
-		return "", fmt.Errorf("sealed box 暗号化失敗: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T(i18n.MsgSealedBoxEncryptFail), err)
 	}
 	return base64.StdEncoding.EncodeToString(encrypted), nil
 }
@@ -472,13 +473,13 @@ func githubPublicKey(client *http.Client, token, owner, repo, envScope string) (
 
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
-		return "", nil, fmt.Errorf("リクエスト生成失敗: %w", err)
+		return "", nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestCreateFail), err)
 	}
 	setGitHubHeaders(req, token)
 
 	res, err := client.Do(req)
 	if err != nil {
-		return "", nil, fmt.Errorf("公開鍵取得失敗: %w", err)
+		return "", nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgPublicKeyFetchFail), err)
 	}
 	defer res.Body.Close()
 
@@ -487,7 +488,7 @@ func githubPublicKey(client *http.Client, token, owner, repo, envScope string) (
 		if detail := parseGitHubErrorBody(res.Body); detail != "" {
 			msg += ": " + detail
 		}
-		return "", nil, fmt.Errorf("公開鍵取得失敗: %s", msg)
+		return "", nil, fmt.Errorf("%s: %s", i18n.T(i18n.MsgPublicKeyFetchFail), msg)
 	}
 
 	var keyResp struct {
@@ -495,15 +496,15 @@ func githubPublicKey(client *http.Client, token, owner, repo, envScope string) (
 		Key   string `json:"key"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&keyResp); err != nil {
-		return "", nil, fmt.Errorf("公開鍵レスポンスのパース失敗: %w", err)
+		return "", nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgPublicKeyParseFail), err)
 	}
 
 	keyBytes, err := base64.StdEncoding.DecodeString(keyResp.Key)
 	if err != nil {
-		return "", nil, fmt.Errorf("公開鍵の base64 デコード失敗: %w", err)
+		return "", nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgPublicKeyDecodeFail), err)
 	}
 	if len(keyBytes) != 32 {
-		return "", nil, fmt.Errorf("公開鍵の長さが不正です（%d バイト、32 バイト必要）", len(keyBytes))
+		return "", nil, fmt.Errorf("%s", i18n.T(i18n.MsgPublicKeyLengthInvalid, len(keyBytes)))
 	}
 
 	var pubKey [32]byte
@@ -529,14 +530,14 @@ func githubPutSecret(client *http.Client, token, owner, repo, envScope, name, en
 
 	req, err := http.NewRequest(http.MethodPut, apiURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("リクエスト生成失敗: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestCreateFail), err)
 	}
 	setGitHubHeaders(req, token)
 	req.Header.Set("Content-Type", "application/json")
 
 	res, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("送信失敗: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(i18n.MsgSendFail), err)
 	}
 	defer res.Body.Close()
 
@@ -565,13 +566,13 @@ func githubSecretExists(client *http.Client, token, owner, repo, envScope, name 
 
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
-		return false, fmt.Errorf("リクエスト生成失敗: %w", err)
+		return false, fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestCreateFail), err)
 	}
 	setGitHubHeaders(req, token)
 
 	res, err := client.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("リクエスト失敗: %w", err)
+		return false, fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestFail), err)
 	}
 	defer res.Body.Close()
 
@@ -588,7 +589,7 @@ func githubSecretExists(client *http.Client, token, owner, repo, envScope, name 
 	if detail := parseGitHubErrorBody(res.Body); detail != "" {
 		msg += ": " + detail
 	}
-	return false, fmt.Errorf("シークレットの存在確認失敗: %s", msg)
+	return false, fmt.Errorf("%s", i18n.T(i18n.MsgSecretExistCheckFail, msg))
 }
 
 // githubVariableExists は GitHub Actions の変数が存在するかを確認する。
@@ -604,13 +605,13 @@ func githubVariableExists(client *http.Client, token, owner, repo, envScope, nam
 
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
-		return false, fmt.Errorf("リクエスト生成失敗: %w", err)
+		return false, fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestCreateFail), err)
 	}
 	setGitHubHeaders(req, token)
 
 	res, err := client.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("リクエスト失敗: %w", err)
+		return false, fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestFail), err)
 	}
 	defer res.Body.Close()
 
@@ -627,7 +628,7 @@ func githubVariableExists(client *http.Client, token, owner, repo, envScope, nam
 	if detail := parseGitHubErrorBody(res.Body); detail != "" {
 		msg += ": " + detail
 	}
-	return false, fmt.Errorf("変数の存在確認失敗: %s", msg)
+	return false, fmt.Errorf("%s", i18n.T(i18n.MsgVariableExistCheckFail, msg))
 }
 
 // githubCreateVariable は GitHub Actions の変数を新規作成する。
@@ -648,14 +649,14 @@ func githubCreateVariable(client *http.Client, token, owner, repo, envScope, nam
 
 	req, err := http.NewRequest(http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("リクエスト生成失敗: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestCreateFail), err)
 	}
 	setGitHubHeaders(req, token)
 	req.Header.Set("Content-Type", "application/json")
 
 	res, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("送信失敗: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(i18n.MsgSendFail), err)
 	}
 	defer res.Body.Close()
 
@@ -689,14 +690,14 @@ func githubUpdateVariable(client *http.Client, token, owner, repo, envScope, nam
 
 	req, err := http.NewRequest(http.MethodPatch, apiURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("リクエスト生成失敗: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestCreateFail), err)
 	}
 	setGitHubHeaders(req, token)
 	req.Header.Set("Content-Type", "application/json")
 
 	res, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("送信失敗: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T(i18n.MsgSendFail), err)
 	}
 	defer res.Body.Close()
 

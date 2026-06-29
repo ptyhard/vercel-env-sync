@@ -196,7 +196,8 @@ func TestWriteSetupFile_OverwriteProtection(t *testing.T) {
 	if err == nil {
 		t.Fatal("--force なしで既存ファイルへの上書きが成功してしまった")
 	}
-	if !strings.Contains(err.Error(), "上書きするには --force") {
+	// "--force" は en/ja 両カタログのファイル存在エラーに共通して含まれる
+	if !strings.Contains(err.Error(), "--force") {
 		t.Errorf("エラーメッセージが想定と異なる: %v", err)
 	}
 
@@ -337,7 +338,8 @@ func TestRunSetupWithReader_ProjectConfig_OverwriteProtection(t *testing.T) {
 	if err == nil {
 		t.Fatal("--force なしで既存ファイルへの上書きが成功してしまった")
 	}
-	if !strings.Contains(err.Error(), "上書きするには --force") {
+	// "--force" は en/ja 両カタログのファイル存在エラーに共通して含まれる
+	if !strings.Contains(err.Error(), "--force") {
 		t.Errorf("エラーメッセージが想定と異なる: %v", err)
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/ptyhard/env-sync/internal/i18n"
 )
 
 // InitOptions は init サブコマンドのフラグ値を保持する。
@@ -21,7 +23,7 @@ func ParseInitFlags(argv []string, printUsageFn func()) InitOptions {
 		next := func() string {
 			i++
 			if i >= len(argv) {
-				fmt.Fprintf(os.Stderr, "エラー: %s には値が必要です\n", arg)
+				fmt.Fprint(os.Stderr, i18n.T(i18n.MsgFlagNeedsValue, arg))
 				os.Exit(1)
 			}
 			return argv[i]
@@ -29,7 +31,7 @@ func ParseInitFlags(argv []string, printUsageFn func()) InitOptions {
 		// requireValue は空文字のパス指定（例: --env=）を弾く。
 		requireValue := func(flag, v string) string {
 			if v == "" {
-				fmt.Fprintf(os.Stderr, "エラー: %s には空でない値が必要です\n", flag)
+				fmt.Fprint(os.Stderr, i18n.T(i18n.MsgFlagNeedsNonEmpty, flag))
 				os.Exit(1)
 			}
 			return v
@@ -45,13 +47,18 @@ func ParseInitFlags(argv []string, printUsageFn func()) InitOptions {
 			opts.Def = requireValue("--def", strings.TrimPrefix(arg, "--def="))
 		case arg == "--force" || arg == "-force":
 			opts.Force = true
+		case arg == "--lang" || arg == "-lang" || arg == "--language" || arg == "-language":
+			// 言語フラグは main.go でプレスキャン済みのため値を読み飛ばす。
+			next()
+		case strings.HasPrefix(arg, "--lang=") || strings.HasPrefix(arg, "--language="):
+			// 言語フラグは main.go でプレスキャン済みのためスキップする。
 		case arg == "-h" || arg == "--help":
 			if printUsageFn != nil {
 				printUsageFn()
 			}
 			os.Exit(0)
 		default:
-			fmt.Fprintf(os.Stderr, "エラー: 不明な引数: %s\n", arg)
+			fmt.Fprint(os.Stderr, i18n.T(i18n.MsgFlagUnknown, arg))
 			if printUsageFn != nil {
 				printUsageFn()
 			}
@@ -66,20 +73,7 @@ func ParseInitFlags(argv []string, printUsageFn func()) InitOptions {
 func BuildInitYAML(keys []string) string {
 	var sb strings.Builder
 
-	sb.WriteString("# Vercel / GitHub Actions に登録する環境変数の定義。\n")
-	sb.WriteString("#\n")
-	sb.WriteString("# 値はこのファイルには書かない（git にコミットされるため）。値は .env(.production) から取得する。\n")
-	sb.WriteString("# ここに宣言が無いキーは登録されない（.env にあっても警告のうえスキップされる）。\n")
-	sb.WriteString("#\n")
-	sb.WriteString("#   secret: true|false\n")
-	sb.WriteString("#           - true  : シークレットとして登録（Vercel: sensitive / GitHub: Secret）\n")
-	sb.WriteString("#           - false : 平文として登録（Vercel: plain / GitHub: Variable）\n")
-	sb.WriteString("#   environments: []  登録先環境の配列\n")
-	sb.WriteString("#           Vercel: production|preview|development（空なら production,preview）\n")
-	sb.WriteString("#           GitHub: named environment 名（空なら repo レベル）\n")
-	sb.WriteString("#\n")
-	sb.WriteString("# !! 以下は init が生成した雛形です。secret は投入前に必ず見直すこと !!\n")
-	sb.WriteString("# !! NEXT_PUBLIC_ プレフィックスは secret: false、それ以外は secret: true を初期値としています。!!\n")
+	sb.WriteString(i18n.T(i18n.MsgInitYAMLHeader))
 	sb.WriteString("\n")
 	sb.WriteString("defaults:\n")
 	sb.WriteString("  secret: true\n")
@@ -87,10 +81,7 @@ func BuildInitYAML(keys []string) string {
 	sb.WriteString("variables:\n")
 
 	if len(keys) == 0 {
-		sb.WriteString("  # ---- 例 ----\n")
-		sb.WriteString("  # NEXT_PUBLIC_API_BASE_URL: { secret: false }\n")
-		sb.WriteString("  # DATABASE_URL:             { secret: true }\n")
-		sb.WriteString("  # STAGING_KEY:              { secret: true, environments: [production] }\n")
+		sb.WriteString(i18n.T(i18n.MsgInitYAMLExample))
 		return sb.String()
 	}
 
@@ -152,9 +143,9 @@ func RunInit(argv []string, printUsageFn func()) error {
 	envText, err := os.ReadFile(opts.Env)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("env ファイルが見つかりません: %s", opts.Env)
+			return fmt.Errorf("%s", i18n.T(i18n.MsgEnvFileNotFound, opts.Env))
 		}
-		return fmt.Errorf("env ファイルの読み込みに失敗: %s: %s", opts.Env, err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgInitEnvFileReadFail, opts.Env, err))
 	}
 	envVars := ParseDotenv(string(envText))
 	keys := SortedStrKeys(envVars)
@@ -169,28 +160,28 @@ func RunInit(argv []string, printUsageFn func()) error {
 	f, err := os.OpenFile(opts.Def, flags, 0o644)
 	if err != nil {
 		if !opts.Force && os.IsExist(err) {
-			return fmt.Errorf("既に存在します: %s（上書きするには --force）", opts.Def)
+			return fmt.Errorf("%s", i18n.T(i18n.MsgFileExists, opts.Def))
 		}
-		return fmt.Errorf("定義ファイルの書き込みに失敗: %s: %s", opts.Def, err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgInitDefWriteFail, opts.Def, err))
 	}
 	if _, err := f.WriteString(text); err != nil {
 		f.Close()
-		return fmt.Errorf("定義ファイルの書き込みに失敗: %s: %s", opts.Def, err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgInitDefWriteFail, opts.Def, err))
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("定義ファイルの書き込みに失敗: %s: %s", opts.Def, err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgInitDefWriteFail, opts.Def, err))
 	}
 
-	fmt.Printf("生成しました: %s\n", opts.Def)
-	fmt.Printf("キー数: %d\n", len(keys))
+	fmt.Print(i18n.T(i18n.MsgGenerated, opts.Def))
+	fmt.Print(i18n.T(i18n.MsgInitKeyCount, len(keys)))
 	if len(keys) > 0 {
-		fmt.Printf("キー一覧:\n")
+		fmt.Print(i18n.T(i18n.MsgInitKeyListHeader))
 		for _, k := range keys {
 			fmt.Printf("  %s\n", k)
 		}
 	}
 	fmt.Println()
-	fmt.Println("※ secret は投入前に必ず見直してください。値はファイルに書かれていません。")
+	fmt.Println(i18n.T(i18n.MsgInitSecretNote))
 
 	return nil
 }
