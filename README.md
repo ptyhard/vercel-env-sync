@@ -424,3 +424,35 @@ Specifying a named environment in `environments` registers to that environment s
 | `VERCEL_TEAM_ID` | – (Vercel) | Team (org) ID. Falls back to config file or `.vercel/project.json` `orgId` |
 | `GITHUB_TOKEN` | Yes (GitHub) | GitHub access token (not required for dry-run) |
 | `GITHUB_REPO` | – (GitHub) | `owner/repo` format. Auto-detected from config file or `git remote origin` if unset |
+| `--lang <code>` | – | Display language (`en` / `ja`). Default: `en` |
+| `ENV_SYNC_LANG` | – | Display language code (`en` / `ja`). Lower priority than `--lang` |
+
+## Display Language
+
+CLI messages can be displayed in English (default) or Japanese.
+
+### Priority (highest to lowest)
+
+1. `--lang <code>` flag
+2. `ENV_SYNC_LANG` environment variable
+3. `language:` field in config file (`.env-sync.config.yaml` / `~/.config/env-sync/config.yaml`)
+4. Default: `en`
+
+### Config File Example
+
+```yaml
+# .env-sync.config.yaml
+language: ja
+vercel:
+  token: ${VERCEL_TOKEN}
+  project_id: <project ID>
+```
+
+### Supported Languages
+
+| Code | Language |
+|------|----------|
+| `en` | English (default) |
+| `ja` | Japanese |
+
+Invalid or unsupported codes fall back to `en`.

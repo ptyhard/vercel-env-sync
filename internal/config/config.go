@@ -8,6 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/ptyhard/env-sync/internal/i18n"
 	"github.com/ptyhard/env-sync/internal/provider"
 )
 
@@ -29,7 +30,7 @@ func (p *ProviderVal) UnmarshalYAML(value *yaml.Node) error {
 		}
 		p.Values = ss
 	default:
-		return fmt.Errorf("provider は文字列または文字列の配列で指定してください")
+		return fmt.Errorf("%s", i18n.T(i18n.MsgProviderStringOrArray))
 	}
 	return nil
 }
@@ -53,6 +54,27 @@ type Definition struct {
 	Variables map[string]VarConf `yaml:"variables"`
 }
 
+// PrescanLang は argv から --lang / --language フラグの値を先読みして返す。
+// フラグが見つからない場合は "" を返す。
+// プレスキャンは言語決定のための先読みのみを目的とし、他のフラグは無視する。
+func PrescanLang(argv []string) string {
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		if arg == "--lang" || arg == "-lang" || arg == "--language" || arg == "-language" {
+			if i+1 < len(argv) {
+				return argv[i+1]
+			}
+		}
+		if strings.HasPrefix(arg, "--lang=") {
+			return strings.TrimPrefix(arg, "--lang=")
+		}
+		if strings.HasPrefix(arg, "--language=") {
+			return strings.TrimPrefix(arg, "--language=")
+		}
+	}
+	return ""
+}
+
 // ParseFlags はコマンドライン引数を解析して Options を返す。
 // flag パッケージは特殊な短縮形 (-y) と長形 (--yes) の両立や --dry-run の扱いが
 // 煩雑なため手で処理する。
@@ -65,7 +87,7 @@ func ParseFlags(argv []string, printUsageFn func(), versionFn func()) provider.O
 		next := func() string {
 			i++
 			if i >= len(argv) {
-				fmt.Fprintf(os.Stderr, "エラー: %s には値が必要です\n", arg)
+				fmt.Fprint(os.Stderr, i18n.T(i18n.MsgFlagNeedsValue, arg))
 				os.Exit(1)
 			}
 			return argv[i]
@@ -86,16 +108,16 @@ func ParseFlags(argv []string, printUsageFn func(), versionFn func()) provider.O
 		case arg == "--provider" || arg == "-provider":
 			v := next()
 			if !provider.IsRegisteredProvider(v) {
-				names := strings.Join(provider.RegisteredProviderNames(), " または ")
-				fmt.Fprintf(os.Stderr, "エラー: --provider には %s を指定してください\n", names)
+				names := strings.Join(provider.RegisteredProviderNames(), i18n.T(i18n.MsgFlagOrSeparator))
+				fmt.Fprint(os.Stderr, i18n.T(i18n.MsgFlagProviderInvalid, names))
 				os.Exit(1)
 			}
 			opts.Provider = v
 		case strings.HasPrefix(arg, "--provider="):
 			v := strings.TrimPrefix(arg, "--provider=")
 			if !provider.IsRegisteredProvider(v) {
-				names := strings.Join(provider.RegisteredProviderNames(), " または ")
-				fmt.Fprintf(os.Stderr, "エラー: --provider には %s を指定してください\n", names)
+				names := strings.Join(provider.RegisteredProviderNames(), i18n.T(i18n.MsgFlagOrSeparator))
+				fmt.Fprint(os.Stderr, i18n.T(i18n.MsgFlagProviderInvalid, names))
 				os.Exit(1)
 			}
 			opts.Provider = v
@@ -107,6 +129,12 @@ func ParseFlags(argv []string, printUsageFn func(), versionFn func()) provider.O
 			opts.GitHubRepo = next()
 		case strings.HasPrefix(arg, "--github-repo="):
 			opts.GitHubRepo = strings.TrimPrefix(arg, "--github-repo=")
+		case arg == "--lang" || arg == "-lang" || arg == "--language" || arg == "-language":
+			opts.Language = next()
+		case strings.HasPrefix(arg, "--lang="):
+			opts.Language = strings.TrimPrefix(arg, "--lang=")
+		case strings.HasPrefix(arg, "--language="):
+			opts.Language = strings.TrimPrefix(arg, "--language=")
 		case arg == "--version" || arg == "-version":
 			if versionFn != nil {
 				versionFn()
@@ -118,7 +146,7 @@ func ParseFlags(argv []string, printUsageFn func(), versionFn func()) provider.O
 			}
 			os.Exit(0)
 		default:
-			fmt.Fprintf(os.Stderr, "エラー: 不明な引数: %s\n", arg)
+			fmt.Fprint(os.Stderr, i18n.T(i18n.MsgFlagUnknown, arg))
 			if printUsageFn != nil {
 				printUsageFn()
 			}

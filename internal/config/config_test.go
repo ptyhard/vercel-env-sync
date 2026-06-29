@@ -293,3 +293,71 @@ variables:
 func unmarshalDefinition(src string, def *config.Definition) error {
 	return yaml.Unmarshal([]byte(src), def)
 }
+
+// --- --language フラグ（--lang のエイリアス）のテスト ---
+
+// TestParseFlags_Language_SpaceForm は --language ja がスペース区切りで解析されることを確認する。
+func TestParseFlags_Language_SpaceForm(t *testing.T) {
+	opts := config.ParseFlags([]string{"--language", "ja"}, nil, nil)
+	if opts.Language != "ja" {
+		t.Errorf("--language ja: Language = %q, want ja", opts.Language)
+	}
+}
+
+// TestParseFlags_Language_EqualForm は --language=ja がイコール形式で解析されることを確認する。
+func TestParseFlags_Language_EqualForm(t *testing.T) {
+	opts := config.ParseFlags([]string{"--language=ja"}, nil, nil)
+	if opts.Language != "ja" {
+		t.Errorf("--language=ja: Language = %q, want ja", opts.Language)
+	}
+}
+
+// --- PrescanLang のテスト ---
+
+// TestPrescanLang_LangFlag_SpaceForm は --lang val 形式でプレスキャンできることを確認する。
+func TestPrescanLang_LangFlag_SpaceForm(t *testing.T) {
+	got := config.PrescanLang([]string{"--lang", "ja", "--env", ".env"})
+	if got != "ja" {
+		t.Errorf("PrescanLang(--lang ja ...): got %q, want ja", got)
+	}
+}
+
+// TestPrescanLang_LangFlag_EqualForm は --lang=val 形式でプレスキャンできることを確認する。
+func TestPrescanLang_LangFlag_EqualForm(t *testing.T) {
+	got := config.PrescanLang([]string{"--lang=ja"})
+	if got != "ja" {
+		t.Errorf("PrescanLang(--lang=ja): got %q, want ja", got)
+	}
+}
+
+// TestPrescanLang_LanguageFlag_SpaceForm は --language val 形式でプレスキャンできることを確認する。
+func TestPrescanLang_LanguageFlag_SpaceForm(t *testing.T) {
+	got := config.PrescanLang([]string{"--language", "ja"})
+	if got != "ja" {
+		t.Errorf("PrescanLang(--language ja): got %q, want ja", got)
+	}
+}
+
+// TestPrescanLang_LanguageFlag_EqualForm は --language=val 形式でプレスキャンできることを確認する。
+func TestPrescanLang_LanguageFlag_EqualForm(t *testing.T) {
+	got := config.PrescanLang([]string{"--language=en"})
+	if got != "en" {
+		t.Errorf("PrescanLang(--language=en): got %q, want en", got)
+	}
+}
+
+// TestPrescanLang_NoFlag は言語フラグがないとき空文字を返すことを確認する。
+func TestPrescanLang_NoFlag(t *testing.T) {
+	got := config.PrescanLang([]string{"--env", ".env", "--dry-run"})
+	if got != "" {
+		t.Errorf("PrescanLang(フラグなし): got %q, want empty", got)
+	}
+}
+
+// TestPrescanLang_Empty は空スライスのとき空文字を返すことを確認する。
+func TestPrescanLang_Empty(t *testing.T) {
+	got := config.PrescanLang([]string{})
+	if got != "" {
+		t.Errorf("PrescanLang(空): got %q, want empty", got)
+	}
+}

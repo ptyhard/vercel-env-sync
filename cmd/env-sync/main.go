@@ -84,6 +84,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/ptyhard/env-sync/internal/config"
+	"github.com/ptyhard/env-sync/internal/i18n"
 	"github.com/ptyhard/env-sync/internal/provider"
 	internalsync "github.com/ptyhard/env-sync/internal/sync"
 
@@ -166,23 +167,39 @@ func versionInfo() (v, c, d string) {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "エラー: %s\n", err)
+		fmt.Fprint(os.Stderr, i18n.T(i18n.MsgErrorPrefix, err))
 		os.Exit(1)
 	}
-}
-
-func die(format string, a ...interface{}) error {
-	return fmt.Errorf(format, a...)
 }
 
 func run() error {
 	args := os.Args[1:]
 
 	if len(args) > 0 && args[0] == "init" {
+		// --lang フラグと AppConfig の language フィールドも言語解決に含める。
+		// PrescanLang はフラグ解析前に --lang/--language の値だけを先読みする。
+		prescannedLang := config.PrescanLang(args[1:])
+		// config 読み込み失敗時は configVal を "" として継続する。
+		// エラーは後続の本処理（init ロジック内の LoadAppConfig 呼び出し等）で顕在化する。
+		var configLang string
+		if appCfg, err := config.LoadAppConfig(); err == nil {
+			configLang = appCfg.Language
+		}
+		i18n.SetLang(string(i18n.Resolve(prescannedLang, os.Getenv("ENV_SYNC_LANG"), configLang)))
 		return config.RunInit(args[1:], printUsage)
 	}
 
 	if len(args) > 0 && args[0] == "setup" {
+		// --lang フラグと AppConfig の language フィールドも言語解決に含める。
+		// PrescanLang はフラグ解析前に --lang/--language の値だけを先読みする。
+		prescannedLang := config.PrescanLang(args[1:])
+		// config 読み込み失敗時は configVal を "" として継続する。
+		// エラーは後続の本処理（setup ロジック内の LoadAppConfig 呼び出し等）で顕在化する。
+		var configLang string
+		if appCfg, err := config.LoadAppConfig(); err == nil {
+			configLang = appCfg.Language
+		}
+		i18n.SetLang(string(i18n.Resolve(prescannedLang, os.Getenv("ENV_SYNC_LANG"), configLang)))
 		return config.RunSetup(args[1:], printUsage)
 	}
 
@@ -190,29 +207,46 @@ func run() error {
 		v, c, d := versionInfo()
 		fmt.Printf("env-sync version %s (commit: %s, built: %s)\n", v, c, d)
 	}
+
+	// ParseFlags の内部で --help/--version が処理されて os.Exit(0) するため、
+	// その前に言語を確定させる必要がある。init/setup と同じパターンで先読みする。
+	// PrescanLang はメイン経路ではサブコマンド名が無いため args をそのまま渡す。
+	prescannedLang := config.PrescanLang(args)
+	// config 読み込み失敗時は configLang を "" として継続する。
+	// エラーは後続の本処理（provider.Sync 内の LoadAppConfig 呼び出し）で顕在化する。
+	var configLang string
+	if appCfg, err := config.LoadAppConfig(); err == nil {
+		configLang = appCfg.Language
+	}
+	i18n.SetLang(string(i18n.Resolve(prescannedLang, os.Getenv("ENV_SYNC_LANG"), configLang)))
+
 	opts := config.ParseFlags(args, printUsage, printVersion)
+
+	// ParseFlags 後に opts.Language（正式解析済み）で言語を再確定する。
+	// configLang は上で取得済みのため LoadAppConfig を再呼び出ししない。
+	i18n.SetLang(string(i18n.Resolve(opts.Language, os.Getenv("ENV_SYNC_LANG"), configLang)))
 
 	// ---- 入力読み込み ----
 	if !config.FileExists(opts.Env) {
-		return die("env ファイルが見つかりません: %s", opts.Env)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgEnvFileNotFound, opts.Env))
 	}
 	if !config.FileExists(opts.Def) {
-		return die("定義ファイルが見つかりません: %s", opts.Def)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgDefFileNotFound, opts.Def))
 	}
 
 	envText, err := os.ReadFile(opts.Env)
 	if err != nil {
-		return die("env ファイルの読み込みに失敗: %s", err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgEnvFileReadFail, err))
 	}
 	envVars := config.ParseDotenv(string(envText))
 
 	defText, err := os.ReadFile(opts.Def)
 	if err != nil {
-		return die("定義ファイルの読み込みに失敗: %s", err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgDefFileReadFail, err))
 	}
 	var def config.Definition
 	if err := yaml.Unmarshal(defText, &def); err != nil {
-		return die("定義ファイルの YAML パースに失敗: %s", err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgDefFileYAMLFail, err))
 	}
 
 	// ---- 整合性チェック（provider 共通） ----
@@ -223,12 +257,12 @@ func run() error {
 	}
 	for _, k := range defKeys {
 		if _, ok := envVars[k]; !ok {
-			fmt.Fprintf(os.Stderr, "⚠ %s: 定義にあるが %s に値が無いためスキップ\n", k, opts.Env)
+			fmt.Fprint(os.Stderr, i18n.T(i18n.MsgSkipNoValueInEnv, k, opts.Env))
 		}
 	}
 	for _, k := range config.SortedStrKeys(envVars) {
 		if !defKeySet[k] {
-			fmt.Fprintf(os.Stderr, "⚠ %s: %s にあるが定義に無いためスキップ\n", k, opts.Env)
+			fmt.Fprint(os.Stderr, i18n.T(i18n.MsgSkipNotDefined, k, opts.Env))
 		}
 	}
 
@@ -248,7 +282,7 @@ func run() error {
 
 	// entries が 0 件なら同期対象なしを明示して終了
 	if len(entries) == 0 {
-		fmt.Println("登録対象がありません")
+		fmt.Println(i18n.T(i18n.MsgNoEntries))
 		return nil
 	}
 
@@ -268,101 +302,5 @@ func run() error {
 }
 
 func printUsage() {
-	fmt.Fprint(os.Stderr, `env-sync - 定義ファイルで宣言した環境変数を Vercel または GitHub Actions へ一括登録(同期)する
-
-サブコマンド:
-  init    .env から env-sync.yaml の雛形を生成する
-  setup   認証情報 config ファイル（.env-sync.config.yaml / ~/.config/env-sync/config.yaml）を対話生成する
-
-使い方:
-  VERCEL_TOKEN=xxxxx env-sync [オプション]
-  GITHUB_TOKEN=xxxxx env-sync --provider github [オプション]
-  env-sync init [--env <file>] [--def <file>] [--force]
-  env-sync setup [--global] [--force]
-
-オプション（同期）:
-  --provider <name>         同期先（デフォルト vercel）
-  --env <file>              値を読む env ファイル（デフォルト .env）
-  --def <file>              定義 YAML（デフォルト env-sync.yaml）
-  --dry-run                 送信せず新規/更新の区別を含む登録予定一覧を表示（値は出さない）
-  --yes, -y                 更新(上書き)を含む場合の確認をスキップして送信
-  --vercel-project <name>   config の vercel.projects から指定名のプロジェクトのみ同期（モノレポ対応）
-  --github-repo <name>      config の github.repos から指定名のリポジトリのみ同期（モノレポ対応）
-  --version                 バージョン情報を表示して終了
-  -h, --help                このヘルプを表示
-
-確認動作:
-  送信前に provider へ問い合わせ、既存 key を「⟳ KEY [更新]」、未登録 key を「+ KEY [新規]」として表示する。
-  更新(上書き)対象がある場合のみ確認プロンプトが出る。新規のみなら確認なしで送信する。
-  非対話環境(TTY なし)で更新対象があり --yes/-y がない場合はエラーで停止し --yes を案内する。
-
-オプション（init）:
-  --env <file>   読み込む env ファイル（デフォルト .env）
-  --def <file>   出力する YAML ファイル（デフォルト env-sync.yaml）
-  --force        既存の def ファイルを上書きする
-
-オプション（setup）:
-  --global       ~/.config/env-sync/config.yaml（XDG_CONFIG_HOME 尊重）へ出力（デフォルトは .env-sync.config.yaml）
-  --force        既存の config ファイルを上書きする
-
-環境変数（Vercel）:
-  VERCEL_TOKEN       Vercel のアクセストークン（必須、dry-run 時は不要）
-  VERCEL_PROJECT_ID  プロジェクト ID。未指定なら config ファイルまたは .vercel/project.json から取得
-  VERCEL_TEAM_ID     チーム(Org) ID。未指定なら config ファイルまたは .vercel/project.json の orgId
-
-環境変数（GitHub）:
-  GITHUB_TOKEN  GitHub のアクセストークン（必須、dry-run 時は不要）
-  GITHUB_REPO   owner/repo 形式のリポジトリ名（未指定なら config ファイルまたは git remote origin から取得）
-
-環境変数（GCP）:
-  GCP_PROJECT_ID  Secret Manager の対象 GCP プロジェクト ID（必須）
-  認証: Application Default Credentials（ADC）を使用。
-        GOOGLE_APPLICATION_CREDENTIALS でサービスアカウント鍵を指定、
-        または gcloud auth application-default login で ADC を設定する。
-
-config ファイル（環境変数の代替）:
-  解決優先順位: 環境変数 > project config > global config > 既存フォールバック
-  global:  ~/.config/env-sync/config.yaml  (XDG_CONFIG_HOME を尊重)
-  project: .env-sync.config.yaml           (カレントディレクトリ)
-
-  スキーマ（単一プロジェクト）:
-    vercel:
-      token:      <Vercel トークン>
-      project_id: <プロジェクト ID>
-      team_id:    <チーム ID>
-    github:
-      token: <GitHub トークン>
-      repo:  <owner/repo>
-
-  スキーマ（モノレポ: 複数プロジェクト / 複数リポジトリ）:
-    vercel:
-      token: <デフォルトトークン（per-project で上書き可）>
-      team_id: <デフォルトチーム ID>
-      projects:
-        - name: app-a
-          project_id: <プロジェクト ID>
-        - name: app-b
-          project_id: <プロジェクト ID>
-          token: <per-project トークン（任意）>
-          team_id: <per-project チーム ID（任意）>
-    github:
-      token: <デフォルトトークン（per-repo で上書き可）>
-      repos:
-        - name: frontend
-          repo: org/frontend
-        - name: backend
-          repo: org/backend
-          token: <per-repo トークン（任意）>
-
-  ※ global config にトークンが含まれていてパーミッションが 0600 でない場合は警告を出力します
-
-YAML スキーマ（定義ファイル env-sync.yaml）:
-  secret: true|false  シークレットとして登録するか（デフォルト true）
-                      Vercel: true→sensitive / false→plain
-                      GitHub: true→Secret / false→Variable
-  environments: []    登録先環境の配列
-                      Vercel: production|preview|development（空なら production,preview）
-                      GitHub: named environment 名（空なら repo レベル）
-                      ※ GitHub の named environment は事前に作成が必要
-`)
+	fmt.Fprint(os.Stderr, i18n.T(i18n.MsgUsage))
 }

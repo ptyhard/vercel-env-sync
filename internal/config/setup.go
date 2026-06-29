@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"golang.org/x/term"
+
+	"github.com/ptyhard/env-sync/internal/i18n"
 )
 
 // SetupOptions は setup サブコマンドのフラグ値を保持する。
@@ -42,13 +44,18 @@ func ParseSetupFlags(argv []string, printUsageFn func()) SetupOptions {
 			opts.Global = true
 		case arg == "--force" || arg == "-force":
 			opts.Force = true
+		case arg == "--lang" || arg == "-lang" || arg == "--language" || arg == "-language":
+			// 言語フラグは main.go でプレスキャン済みのため値を読み飛ばす。
+			i++
+		case strings.HasPrefix(arg, "--lang=") || strings.HasPrefix(arg, "--language="):
+			// 言語フラグは main.go でプレスキャン済みのためスキップする。
 		case arg == "-h" || arg == "--help":
 			if printUsageFn != nil {
 				printUsageFn()
 			}
 			os.Exit(0)
 		default:
-			fmt.Fprintf(os.Stderr, "エラー: 不明な引数: %s\n", arg)
+			fmt.Fprint(os.Stderr, i18n.T(i18n.MsgFlagUnknown, arg))
 			if printUsageFn != nil {
 				printUsageFn()
 			}
@@ -71,9 +78,7 @@ func yamlSingleQuote(value string) string {
 // ユーザー入力値は YAML シングルクォートスカラとして安全にエスケープして出力する。
 func BuildSetupYAML(answers SetupAnswers) string {
 	var sb strings.Builder
-	sb.WriteString("# env-sync 認証情報 config\n")
-	sb.WriteString("# このファイルをコミットしないよう .gitignore に追記することを推奨します。\n")
-	sb.WriteString("# projects[] / repos[]（モノレポ向け複数ターゲット）は手で追記してください。\n")
+	sb.WriteString(i18n.T(i18n.MsgSetupYAMLHeader))
 
 	if answers.UseVercel {
 		sb.WriteString("vercel:\n")
@@ -118,21 +123,21 @@ func WriteSetupFile(path, content string, perm os.FileMode, force bool) error {
 	f, err := os.OpenFile(path, flags, perm)
 	if err != nil {
 		if !force && os.IsExist(err) {
-			return fmt.Errorf("既に存在します: %s（上書きするには --force）", path)
+			return fmt.Errorf("%s", i18n.T(i18n.MsgFileExists, path))
 		}
-		return fmt.Errorf("config ファイルの書き込みに失敗: %s: %s", path, err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgSetupConfigWriteFail, path, err))
 	}
 	if _, err := f.WriteString(content); err != nil {
 		f.Close()
-		return fmt.Errorf("config ファイルの書き込みに失敗: %s: %s", path, err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgSetupConfigWriteFail, path, err))
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("config ファイルの書き込みに失敗: %s: %s", path, err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgSetupConfigWriteFail, path, err))
 	}
 	// --force 上書き時は os.OpenFile の perm が既存ファイルに適用されないため
 	// 書き込み完了後に明示的にパーミッションを設定する。
 	if err := os.Chmod(path, perm); err != nil {
-		return fmt.Errorf("config ファイルのパーミッション設定に失敗: %s: %s", path, err)
+		return fmt.Errorf("%s", i18n.T(i18n.MsgSetupConfigChmodFail, path, err))
 	}
 	return nil
 }
@@ -140,19 +145,7 @@ func WriteSetupFile(path, content string, perm os.FileMode, force bool) error {
 // RunSetup は setup サブコマンドのメイン処理。非 TTY 環境ではエラーで停止する。
 func RunSetup(argv []string, printUsageFn func()) error {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return fmt.Errorf(
-			"非対話環境（TTY なし）では setup は実行できません。\n" +
-				"config ファイルを手で作成するか、次の例を参考にしてください:\n" +
-				"  mkdir -p ~/.config/env-sync\n" +
-				"  cat > ~/.config/env-sync/config.yaml <<'EOF'\n" +
-				"  vercel:\n" +
-				"    token: ${VERCEL_TOKEN}\n" +
-				"    project_id: <プロジェクト ID>\n" +
-				"  github:\n" +
-				"    token: ${GITHUB_TOKEN}\n" +
-				"    repo: <owner/repo>\n" +
-				"  EOF\n" +
-				"  chmod 0600 ~/.config/env-sync/config.yaml")
+		return fmt.Errorf("%s", i18n.T(i18n.MsgSetupNonInteractive))
 	}
 	return RunSetupWithReader(argv, printUsageFn, os.Stdin)
 }
@@ -173,11 +166,11 @@ func RunSetupWithReader(argv []string, printUsageFn func(), in io.Reader) error 
 	if opts.Global {
 		outputPath = globalAppConfigPath()
 		if outputPath == "" {
-			return fmt.Errorf("ホームディレクトリが取得できません")
+			return fmt.Errorf("%s", i18n.T(i18n.MsgSetupHomeDirFail))
 		}
 		dir := filepath.Dir(outputPath)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("ディレクトリの作成に失敗: %s: %s", dir, err)
+			return fmt.Errorf("%s", i18n.T(i18n.MsgSetupDirCreateFail, dir, err))
 		}
 	} else {
 		outputPath = projectAppConfigFile
@@ -193,12 +186,12 @@ func RunSetupWithReader(argv []string, printUsageFn func(), in io.Reader) error 
 		return err
 	}
 
-	fmt.Printf("生成しました: %s\n", outputPath)
+	fmt.Print(i18n.T(i18n.MsgGenerated, outputPath))
 	if answers.HasPlainToken || opts.Global {
-		fmt.Println("トークンが含まれます。パーミッションは 0600 です。")
+		fmt.Println(i18n.T(i18n.MsgSetupTokenNote))
 	}
 	fmt.Println()
-	fmt.Println("※ このファイルを .gitignore に追記することを推奨します。")
+	fmt.Println(i18n.T(i18n.MsgSetupGitignoreNote))
 
 	return nil
 }
@@ -207,7 +200,7 @@ func promptSetupAnswers(reader *bufio.Reader) (SetupAnswers, error) {
 	var answers SetupAnswers
 
 	// Vercel
-	fmt.Print("Vercel を設定しますか？ (Y/n): ")
+	fmt.Print(i18n.T(i18n.MsgSetupAskVercel))
 	useVercel, err := setupReadYesNo(reader, true)
 	if err != nil {
 		return answers, err
@@ -215,21 +208,21 @@ func promptSetupAnswers(reader *bufio.Reader) (SetupAnswers, error) {
 	answers.UseVercel = useVercel
 
 	if useVercel {
-		fmt.Print("Vercel project_id: ")
+		fmt.Print(i18n.T(i18n.MsgSetupVercelProjectID))
 		projectID, err := setupReadLine(reader)
 		if err != nil {
 			return answers, err
 		}
 		answers.VercelProjectID = projectID
 
-		fmt.Print("Vercel team_id（任意、Enter でスキップ）: ")
+		fmt.Print(i18n.T(i18n.MsgSetupVercelTeamID))
 		teamID, err := setupReadLine(reader)
 		if err != nil {
 			return answers, err
 		}
 		answers.VercelTeamID = teamID
 
-		fmt.Print("Vercel token を ${VERCEL_TOKEN} 環境変数参照で書きますか？（推奨）(Y/n): ")
+		fmt.Print(i18n.T(i18n.MsgSetupVercelTokenEnvRef))
 		useEnvRef, err := setupReadYesNo(reader, true)
 		if err != nil {
 			return answers, err
@@ -237,7 +230,7 @@ func promptSetupAnswers(reader *bufio.Reader) (SetupAnswers, error) {
 		if useEnvRef {
 			answers.VercelTokenRef = "${VERCEL_TOKEN}"
 		} else {
-			fmt.Print("Vercel token（平文でファイルに書き込みます）: ")
+			fmt.Print(i18n.T(i18n.MsgSetupVercelTokenPlain))
 			token, err := setupReadLine(reader)
 			if err != nil {
 				return answers, err
@@ -248,7 +241,7 @@ func promptSetupAnswers(reader *bufio.Reader) (SetupAnswers, error) {
 	}
 
 	// GitHub
-	fmt.Print("GitHub を設定しますか？ (Y/n): ")
+	fmt.Print(i18n.T(i18n.MsgSetupAskGitHub))
 	useGitHub, err := setupReadYesNo(reader, true)
 	if err != nil {
 		return answers, err
@@ -256,14 +249,14 @@ func promptSetupAnswers(reader *bufio.Reader) (SetupAnswers, error) {
 	answers.UseGitHub = useGitHub
 
 	if useGitHub {
-		fmt.Print("GitHub repo（owner/repo 形式）: ")
+		fmt.Print(i18n.T(i18n.MsgSetupGitHubRepo))
 		repo, err := setupReadLine(reader)
 		if err != nil {
 			return answers, err
 		}
 		answers.GitHubRepo = repo
 
-		fmt.Print("GitHub token を ${GITHUB_TOKEN} 環境変数参照で書きますか？（推奨）(Y/n): ")
+		fmt.Print(i18n.T(i18n.MsgSetupGitHubTokenEnvRef))
 		useEnvRef, err := setupReadYesNo(reader, true)
 		if err != nil {
 			return answers, err
@@ -271,7 +264,7 @@ func promptSetupAnswers(reader *bufio.Reader) (SetupAnswers, error) {
 		if useEnvRef {
 			answers.GitHubTokenRef = "${GITHUB_TOKEN}"
 		} else {
-			fmt.Print("GitHub token（平文でファイルに書き込みます）: ")
+			fmt.Print(i18n.T(i18n.MsgSetupGitHubTokenPlain))
 			token, err := setupReadLine(reader)
 			if err != nil {
 				return answers, err
@@ -287,7 +280,7 @@ func promptSetupAnswers(reader *bufio.Reader) (SetupAnswers, error) {
 func setupReadLine(reader *bufio.Reader) (string, error) {
 	line, err := reader.ReadString('\n')
 	if err != nil && err != io.EOF {
-		return "", fmt.Errorf("入力の読み込みに失敗: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T(i18n.MsgSetupInputReadFail), err)
 	}
 	// 改行文字のほか前後の空白も除去する。
 	// 末尾スペース等が project_id / repo / token に混入すると認証や ID 解決が失敗しやすいため。
