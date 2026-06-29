@@ -70,9 +70,14 @@ func (v *vercelProvider) Validate(opts provider.Options, _ []provider.Entry) err
 			fmt.Fprint(stdoutWriter, i18n.T(i18n.MsgValidateVercelTeamID, tgt.TeamID, vercelSourceLabel(tgt.TeamIDSource)))
 		}
 
-		// token / projectId が未設定なら API 確認をスキップ
-		if tgt.Token == "" || tgt.ProjectID == "" {
+		// token / projectId が未設定なら API 確認をスキップ（それぞれ個別にメッセージを出す）
+		if tgt.Token == "" {
 			fmt.Fprint(stdoutWriter, i18n.T(i18n.MsgValidateTokenUnsetSkip))
+			ngCount++
+			continue
+		}
+		if tgt.ProjectID == "" {
+			fmt.Fprint(stdoutWriter, i18n.T(i18n.MsgValidateProjectIDUnsetSkip))
 			ngCount++
 			continue
 		}

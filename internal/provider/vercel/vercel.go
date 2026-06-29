@@ -509,6 +509,11 @@ func vercelCheckAccess(client *http.Client, token, projectID, teamID string) (st
 		return 0, "", err
 	}
 	defer res.Body.Close()
+	// 2xx 以外の場合のみエラー詳細を読む。2xx 時はレスポンスボディが大きくなり得るためドレインのみ行う。
+	if res.StatusCode >= 200 && res.StatusCode < 300 {
+		io.Copy(io.Discard, res.Body) //nolint:errcheck // drain で接続を再利用可能にする
+		return res.StatusCode, "", nil
+	}
 	d := parseErrorBody(res.Body)
 	return res.StatusCode, d, nil
 }

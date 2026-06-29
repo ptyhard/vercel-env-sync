@@ -309,6 +309,10 @@ const (
 	MsgValidateOK MsgKey = "validate.ok"
 	// MsgValidateTokenUnsetSkip はトークン未設定のため API 確認をスキップするメッセージ。
 	MsgValidateTokenUnsetSkip MsgKey = "validate.token_unset_skip"
+	// MsgValidateProjectIDUnsetSkip は projectId 未設定のため API 確認をスキップするメッセージ（Vercel）。
+	MsgValidateProjectIDUnsetSkip MsgKey = "validate.project_id_unset_skip"
+	// MsgValidateRepoUnresolvableSkip は repo 解決失敗のため API 確認をスキップするメッセージ（GitHub）。
+	MsgValidateRepoUnresolvableSkip MsgKey = "validate.repo_unresolvable_skip"
 	// MsgValidateVercelCause404 は Vercel 404 の推定原因。
 	MsgValidateVercelCause404 MsgKey = "validate.vercel_cause_404"
 	// MsgValidateVercelCause401 は Vercel 401 の推定原因。

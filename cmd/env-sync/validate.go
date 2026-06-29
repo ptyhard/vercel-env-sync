@@ -16,7 +16,11 @@ import (
 // 認証トークン・ターゲット設定・API 到達確認を行う。
 // def / env ファイルは使用しないため、不在でも fatal にはならない。
 func runValidate(args []string, printUsage func()) error {
-	opts := config.ParseFlags(args, printUsage, func() {})
+	printVersion := func() {
+		v, c, d := versionInfo()
+		fmt.Printf("env-sync version %s (commit: %s, built: %s)\n", v, c, d)
+	}
+	opts := config.ParseFlags(args, printUsage, printVersion)
 
 	pname := opts.Provider
 	p, ok := provider.LookupProvider(pname)

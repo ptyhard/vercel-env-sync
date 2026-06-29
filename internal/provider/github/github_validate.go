@@ -66,7 +66,7 @@ func (g *githubProvider) Validate(opts provider.Options, entries []provider.Entr
 		// repo 表示
 		if resolveErr != nil {
 			fmt.Fprintf(githubStdoutWriter, "  repo      : %s (%s)\n", i18n.T(i18n.MsgValidateSourceUnset), githubSourceLabel(repoSrc))
-			fmt.Fprint(githubStdoutWriter, i18n.T(i18n.MsgValidateTokenUnsetSkip))
+			fmt.Fprint(githubStdoutWriter, i18n.T(i18n.MsgValidateRepoUnresolvableSkip))
 			ngCount++
 			continue
 		}
