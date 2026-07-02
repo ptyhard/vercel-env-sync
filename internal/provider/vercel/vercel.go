@@ -448,12 +448,13 @@ func existingKeySet(envs []vercelEnv) map[string]bool {
 // 以下は env-sync の管理外とみなし削除対象から除外する:
 //   - システム変数（system=true または type=system）
 //   - インテグレーション（Blob Store・Marketplace 等）が作成した変数（configurationId が非空）
+//   - ID が空のレコード（削除 URL を組み立てられないため安全側に倒して除外）
 //
 // keep は Options.PruneKeep が返す保持判定（定義済みキー + prune_exclude パターン）。
 func computeVercelPrune(envs []vercelEnv, keep func(key string) bool) []vercelEnv {
 	var prune []vercelEnv
 	for _, e := range envs {
-		if e.System || e.Type == "system" || e.ConfigurationID != "" || keep(e.Key) {
+		if e.ID == "" || e.System || e.Type == "system" || e.ConfigurationID != "" || keep(e.Key) {
 			continue
 		}
 		prune = append(prune, e)

@@ -197,7 +197,8 @@ func githubListNames(client *http.Client, token, owner, repo, envScope string, s
 
 		// secrets / variables どちらのレスポンスにも対応する共通デコード
 		var resp struct {
-			Secrets []struct {
+			TotalCount int `json:"total_count"`
+			Secrets    []struct {
 				Name string `json:"name"`
 			} `json:"secrets"`
 			Variables []struct {
@@ -219,7 +220,9 @@ func githubListNames(client *http.Client, token, owner, repo, envScope string, s
 			names = append(names, v.Name)
 			count++
 		}
-		if count < perPage {
+		// total_count に達したら終了（件数が per_page の倍数のときの空ページ取得を避ける）。
+		// count < perPage は total_count が取得できない場合のフォールバック終了条件。
+		if count < perPage || (resp.TotalCount > 0 && len(names) >= resp.TotalCount) {
 			return names, nil
 		}
 	}

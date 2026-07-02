@@ -145,6 +145,33 @@ func TestGithubListNames_Pagination(t *testing.T) {
 	}
 }
 
+func TestGithubListNames_ExactMultipleOfPerPage_NoExtraRequest(t *testing.T) {
+	// 件数がちょうど 100（per_page の倍数）のとき、total_count により追加の空ページ取得をしないこと
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var secrets []map[string]string
+		for i := 0; i < 100; i++ {
+			secrets = append(secrets, map[string]string{"name": fmt.Sprintf("KEY_%d", i)})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"total_count": 100, "secrets": secrets})
+	}))
+	defer srv.Close()
+	withGitHubAPIBase(t, srv.URL)
+
+	names, err := githubListNames(&http.Client{}, "token", "owner", "repo", "", true)
+	if err != nil {
+		t.Fatalf("githubListNames: %v", err)
+	}
+	if len(names) != 100 {
+		t.Errorf("names 件数 = %d, want 100", len(names))
+	}
+	if requests != 1 {
+		t.Errorf("リクエスト回数 = %d, want 1（total_count 到達で追加ページを取得しない）", requests)
+	}
+}
+
 func TestGithubListNames_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

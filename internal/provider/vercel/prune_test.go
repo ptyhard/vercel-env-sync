@@ -52,6 +52,18 @@ func TestComputeVercelPrune_MultipleRecordsSameKey(t *testing.T) {
 	}
 }
 
+func TestComputeVercelPrune_SkipsEmptyID(t *testing.T) {
+	// ID が空のレコードは削除 URL を組み立てられないため安全側に倒して除外する
+	envs := []vercelEnv{
+		{ID: "", Key: "NO_ID_KEY"},
+		{ID: "id1", Key: "STALE_KEY"},
+	}
+	got := computeVercelPrune(envs, keepFunc())
+	if len(got) != 1 || got[0].Key != "STALE_KEY" {
+		t.Errorf("prune 対象 = %v, want [STALE_KEY]（ID 空は除外）", got)
+	}
+}
+
 func TestComputeVercelPrune_AllDefined_Empty(t *testing.T) {
 	envs := []vercelEnv{{ID: "id1", Key: "FOO"}}
 	if got := computeVercelPrune(envs, keepFunc("FOO")); len(got) != 0 {
