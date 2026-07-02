@@ -3,6 +3,22 @@
 # 値はこのファイルには書かない（git にコミットされるため）。値は .env(.production) から取得する。
 # ここに宣言が無いキーは登録されない（.env にあっても警告のうえスキップされる）。
 #
+#   prune: true|false（トップレベル、デフォルト false）
+#           true にすると、variables に定義されていないリモートの変数を同期時に削除する。
+#           CLI の --prune フラグでも有効化できる。削除前に対象一覧を表示して y/N 確認する
+#           （--yes でスキップ、--dry-run は表示のみ）。
+#           - Vercel : プロジェクトの環境変数を削除。ただしシステム変数と
+#                      インテグレーション（Blob Store・Marketplace 等）が作成した変数
+#                      （configurationId を持つもの）は自動で除外される。
+#           - GitHub : Actions Secrets / Variables を削除。repo レベルと、この定義に
+#                      現れる named environment のみスキャンする。
+#           - GCP    : managed-by=env-sync ラベル付き Secret のみ削除対象
+#                      （env-sync が同期時に自動付与。無関係な Secret は消さない）。
+#
+#   prune_exclude: []（トップレベル、任意）
+#           prune で削除しないキー名の glob パターン一覧。大文字小文字は区別しない。
+#           例: prune_exclude: [BLOB_*, SENTRY_DSN]
+#
 #   secret: true|false
 #           - true  : シークレットとして登録
 #                     Vercel: sensitive（保存後は値を読めない）

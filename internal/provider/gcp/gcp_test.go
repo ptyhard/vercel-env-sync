@@ -18,6 +18,8 @@ type mockClient struct {
 	createSecret     func(ctx context.Context, req *secretmanagerpb.CreateSecretRequest) (*secretmanagerpb.Secret, error)
 	updateSecret     func(ctx context.Context, req *secretmanagerpb.UpdateSecretRequest) (*secretmanagerpb.Secret, error)
 	addSecretVersion func(ctx context.Context, req *secretmanagerpb.AddSecretVersionRequest) (*secretmanagerpb.SecretVersion, error)
+	listSecrets      func(ctx context.Context, req *secretmanagerpb.ListSecretsRequest) ([]*secretmanagerpb.Secret, error)
+	deleteSecret     func(ctx context.Context, req *secretmanagerpb.DeleteSecretRequest) error
 }
 
 func (m *mockClient) GetSecret(ctx context.Context, req *secretmanagerpb.GetSecretRequest) (*secretmanagerpb.Secret, error) {
@@ -29,11 +31,28 @@ func (m *mockClient) CreateSecret(ctx context.Context, req *secretmanagerpb.Crea
 }
 
 func (m *mockClient) UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateSecretRequest) (*secretmanagerpb.Secret, error) {
+	if m.updateSecret == nil {
+		return &secretmanagerpb.Secret{}, nil
+	}
 	return m.updateSecret(ctx, req)
 }
 
 func (m *mockClient) AddSecretVersion(ctx context.Context, req *secretmanagerpb.AddSecretVersionRequest) (*secretmanagerpb.SecretVersion, error) {
 	return m.addSecretVersion(ctx, req)
+}
+
+func (m *mockClient) ListSecrets(ctx context.Context, req *secretmanagerpb.ListSecretsRequest) ([]*secretmanagerpb.Secret, error) {
+	if m.listSecrets == nil {
+		return nil, nil
+	}
+	return m.listSecrets(ctx, req)
+}
+
+func (m *mockClient) DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteSecretRequest) error {
+	if m.deleteSecret == nil {
+		return nil
+	}
+	return m.deleteSecret(ctx, req)
 }
 
 func (m *mockClient) Close() error { return nil }
@@ -46,9 +65,13 @@ func notFoundErr() error {
 // --- buildLabels のテスト ---
 
 func TestBuildLabels_Empty(t *testing.T) {
+	// environments が空でも managed-by ラベルは常に付与される（prune の対象識別用）
 	labels := buildLabels(nil)
-	if labels != nil {
-		t.Errorf("buildLabels(nil) = %v, want nil", labels)
+	if v, ok := labels["managed-by"]; !ok || v != "env-sync" {
+		t.Errorf(`labels["managed-by"] = %q, want "env-sync"`, v)
+	}
+	if _, ok := labels["environment"]; ok {
+		t.Errorf(`environments が空のとき labels["environment"] は付与されないはず: %v`, labels)
 	}
 }
 
@@ -56,6 +79,9 @@ func TestBuildLabels_Single(t *testing.T) {
 	labels := buildLabels([]string{"production"})
 	if v, ok := labels["environment"]; !ok || v != "production" {
 		t.Errorf(`labels["environment"] = %q, want "production"`, v)
+	}
+	if v, ok := labels["managed-by"]; !ok || v != "env-sync" {
+		t.Errorf(`labels["managed-by"] = %q, want "env-sync"`, v)
 	}
 }
 
@@ -128,12 +154,42 @@ func TestSyncSecret_ExistingSecret_WithEnvironments(t *testing.T) {
 	}
 }
 
-func TestSyncSecret_ExistingSecret_NoEnvironments(t *testing.T) {
-	updateCalled := false
+func TestSyncSecret_ExistingSecret_NoEnvironments_AddsManagedLabel(t *testing.T) {
+	// managed-by ラベルが無い既存 secret には environments が無くてもラベル更新が入る（prune の対象識別用）
+	var updatedLabels map[string]string
 
 	mock := &mockClient{
 		getSecret: func(_ context.Context, req *secretmanagerpb.GetSecretRequest) (*secretmanagerpb.Secret, error) {
 			return &secretmanagerpb.Secret{Name: req.Name}, nil
+		},
+		updateSecret: func(_ context.Context, req *secretmanagerpb.UpdateSecretRequest) (*secretmanagerpb.Secret, error) {
+			updatedLabels = req.Secret.Labels
+			return &secretmanagerpb.Secret{}, nil
+		},
+		addSecretVersion: func(_ context.Context, req *secretmanagerpb.AddSecretVersionRequest) (*secretmanagerpb.SecretVersion, error) {
+			return &secretmanagerpb.SecretVersion{}, nil
+		},
+	}
+
+	entry := provider.Entry{Key: "MY_SECRET", Value: "val", Secret: true}
+	if err := syncSecret(context.Background(), mock, "my-project", entry); err != nil {
+		t.Fatalf("syncSecret: %v", err)
+	}
+	if updatedLabels["managed-by"] != "env-sync" {
+		t.Errorf(`updatedLabels["managed-by"] = %q, want "env-sync"`, updatedLabels["managed-by"])
+	}
+}
+
+func TestSyncSecret_ExistingSecret_LabelsUpToDate_SkipsUpdate(t *testing.T) {
+	// 既存 secret のラベルが最新（managed-by 付与済み・environment 一致）なら更新をスキップする
+	updateCalled := false
+
+	mock := &mockClient{
+		getSecret: func(_ context.Context, req *secretmanagerpb.GetSecretRequest) (*secretmanagerpb.Secret, error) {
+			return &secretmanagerpb.Secret{
+				Name:   req.Name,
+				Labels: map[string]string{"managed-by": "env-sync", "team": "custom"},
+			}, nil
 		},
 		updateSecret: func(_ context.Context, req *secretmanagerpb.UpdateSecretRequest) (*secretmanagerpb.Secret, error) {
 			updateCalled = true
@@ -149,7 +205,39 @@ func TestSyncSecret_ExistingSecret_NoEnvironments(t *testing.T) {
 		t.Fatalf("syncSecret: %v", err)
 	}
 	if updateCalled {
-		t.Error("UpdateSecret は呼ばれるべきではない（environments なし）")
+		t.Error("UpdateSecret は呼ばれるべきではない（ラベルに差分なし）")
+	}
+}
+
+func TestSyncSecret_ExistingSecret_PreservesUnrelatedLabels(t *testing.T) {
+	// 既存の無関係なラベルはマージで保持される
+	var updatedLabels map[string]string
+
+	mock := &mockClient{
+		getSecret: func(_ context.Context, req *secretmanagerpb.GetSecretRequest) (*secretmanagerpb.Secret, error) {
+			return &secretmanagerpb.Secret{
+				Name:   req.Name,
+				Labels: map[string]string{"team": "custom"},
+			}, nil
+		},
+		updateSecret: func(_ context.Context, req *secretmanagerpb.UpdateSecretRequest) (*secretmanagerpb.Secret, error) {
+			updatedLabels = req.Secret.Labels
+			return &secretmanagerpb.Secret{}, nil
+		},
+		addSecretVersion: func(_ context.Context, req *secretmanagerpb.AddSecretVersionRequest) (*secretmanagerpb.SecretVersion, error) {
+			return &secretmanagerpb.SecretVersion{}, nil
+		},
+	}
+
+	entry := provider.Entry{Key: "MY_SECRET", Value: "val", Secret: true, Environments: []string{"production"}}
+	if err := syncSecret(context.Background(), mock, "my-project", entry); err != nil {
+		t.Fatalf("syncSecret: %v", err)
+	}
+	if updatedLabels["team"] != "custom" {
+		t.Errorf(`updatedLabels["team"] = %q, want "custom"（無関係なラベルは保持）`, updatedLabels["team"])
+	}
+	if updatedLabels["environment"] != "production" {
+		t.Errorf(`updatedLabels["environment"] = %q, want "production"`, updatedLabels["environment"])
 	}
 }
 

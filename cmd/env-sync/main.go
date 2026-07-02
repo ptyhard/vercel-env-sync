@@ -74,6 +74,7 @@
 //	--def  <file>             定義 YAML（デフォルト env-sync.yaml）
 //	--dry-run                 実際には送信せず、新規/更新の区別を含む登録予定一覧を表示（値は出さない）
 //	--yes, -y                 更新(上書き)を含む場合の確認をスキップして送信
+//	--prune                   定義ファイルに無いリモートの変数を削除する（定義ファイルの prune: true でも有効化可）
 package main
 
 import (
@@ -263,8 +264,20 @@ func run() error {
 		return fmt.Errorf("%s", i18n.T(i18n.MsgDefFileYAMLFail, err))
 	}
 
+	// ---- prune の解決（--prune フラグ または 定義ファイルの prune: true） ----
+	if def.Prune {
+		opts.Prune = true
+	}
+	if invalid, ok := provider.ValidatePrunePatterns(def.PruneExclude); !ok {
+		return fmt.Errorf("%s", i18n.T(i18n.MsgPruneExcludeInvalid, invalid))
+	}
+	opts.PruneExclude = def.PruneExclude
+
 	// ---- 整合性チェック（provider 共通） ----
 	defKeys := config.SortedKeys(def.Variables)
+	// prune の保持判定用に定義済み全キーを provider へ渡す
+	// （.env に値が無く entries に含まれないキーも削除対象にはしない）
+	opts.DefinedKeys = defKeys
 	defKeySet := make(map[string]bool, len(defKeys))
 	for _, k := range defKeys {
 		defKeySet[k] = true

@@ -382,6 +382,8 @@ variables:
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `prune` | `bool` (top-level) | `true`: delete remote variables not declared in `variables` during sync (default `false`). Can also be enabled with the `--prune` flag. See [Pruning Undefined Variables](#pruning-undefined-variables-prune) |
+| `prune_exclude` | `[]string` (top-level) | Glob patterns of key names to never delete during prune (e.g. `[BLOB_*, SENTRY_DSN]`). Case-insensitive |
 | `secret` | `bool` | `true` (default): register as secret / `false`: register as plaintext |
 | `environments` | `[]string` | Array of target environments. Inherits from `defaults.environments` if omitted |
 | `provider` | `string` or `[]string` | Sync target provider. Falls back to `defaults.provider` → CLI `--provider` flag if omitted |
@@ -409,6 +411,29 @@ Specifying a named environment in `environments` registers to that environment s
 
 > **Note**: GitHub named environments must be pre-created. Specifying a non-existent environment name results in an error.
 
+### Pruning Undefined Variables (`prune`)
+
+When `prune: true` is set at the top level of `env-sync.yaml` (or the `--prune` flag is passed), variables that exist on the remote but are **not declared in `variables`** are deleted during sync.
+
+```yaml
+prune: true
+prune_exclude:
+  - BLOB_*      # e.g. keep tokens provisioned by Vercel Blob Store
+  - SENTRY_DSN
+
+variables:
+  DATABASE_URL: { secret: true }
+```
+
+Safety behavior:
+
+- Deletion targets are listed before sending, and a `y/N` confirmation is always required when any deletion is planned (`--yes` skips it; `--dry-run` only shows the plan).
+- Keys declared in `variables` are always kept — even if they have no value in the `.env` file.
+- Keys matching `prune_exclude` glob patterns are kept (case-insensitive).
+- **Vercel**: system variables and integration-provisioned variables (those with a `configurationId`, e.g. created by Blob Store or Marketplace integrations) are automatically excluded.
+- **GitHub**: Actions Secrets and Variables are pruned at the repository level and in named environments that appear in the definition file.
+- **GCP**: only Secrets labeled `managed-by=env-sync` are pruned. env-sync adds this label automatically when syncing, so Secrets created by anything else are never touched.
+
 ## Options / Environment Variables
 
 | Item | Required | Description |
@@ -420,6 +445,7 @@ Specifying a named environment in `environments` registers to that environment s
 | `--def <file>` | – | Definition YAML (default `env-sync.yaml`) |
 | `--dry-run` | – | Show planned registrations with new/update classification without sending |
 | `--yes` / `-y` | – | Skip confirmation when updates (overwrites) exist |
+| `--prune` | – | Delete remote variables not in the definition file (also enabled by `prune: true` in the definition file) |
 | `--force` | – | Overwrite existing def file during `init` |
 | `VERCEL_TOKEN` | Yes (Vercel) | Vercel access token (not required for dry-run) |
 | `VERCEL_PROJECT_ID` | Conditional (Vercel) | Project ID. Auto-detected from config file or `.vercel/project.json` if unset |

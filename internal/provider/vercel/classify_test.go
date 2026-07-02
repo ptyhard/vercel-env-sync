@@ -102,7 +102,7 @@ func TestCountClassified_Mixed(t *testing.T) {
 	}
 }
 
-// --- vercelFetchExistingKeys の統合テスト（httptest） ---
+// --- vercelFetchEnvs の統合テスト（httptest） ---
 
 func TestVercelFetchExistingKeys_Success(t *testing.T) {
 	var gotPath, gotQuery, gotMethod, gotAuth string
@@ -123,17 +123,18 @@ func TestVercelFetchExistingKeys_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// apiBase を httptest.Server に差し替えて実際に vercelFetchExistingKeys を呼ぶ。
+	// apiBase を httptest.Server に差し替えて実際に vercelFetchEnvs を呼ぶ。
 	// これにより URL 組み立て・ヘッダー付与・ステータス処理・パースまで関数の契約を検証できる。
 	origBase := apiBase
 	apiBase = srv.URL
 	defer func() { apiBase = origBase }()
 
 	client := &http.Client{}
-	existing, err := vercelFetchExistingKeys(client, "test-token", "test-project", "test-team")
+	envs, err := vercelFetchEnvs(client, "test-token", "test-project", "test-team")
 	if err != nil {
-		t.Fatalf("vercelFetchExistingKeys 失敗: %v", err)
+		t.Fatalf("vercelFetchEnvs 失敗: %v", err)
 	}
+	existing := existingKeySet(envs)
 
 	// --- リクエストの組み立てを検証 ---
 	if gotMethod != http.MethodGet {
@@ -174,8 +175,8 @@ func TestVercelFetchExistingKeys_NoTeamID(t *testing.T) {
 	apiBase = srv.URL
 	defer func() { apiBase = origBase }()
 
-	if _, err := vercelFetchExistingKeys(&http.Client{}, "test-token", "test-project", ""); err != nil {
-		t.Fatalf("vercelFetchExistingKeys 失敗: %v", err)
+	if _, err := vercelFetchEnvs(&http.Client{}, "test-token", "test-project", ""); err != nil {
+		t.Fatalf("vercelFetchEnvs 失敗: %v", err)
 	}
 	if gotQuery != "" {
 		t.Errorf("teamID 空のときクエリは空のはず, got %q", gotQuery)
@@ -192,7 +193,7 @@ func TestVercelFetchExistingKeys_HTTPError(t *testing.T) {
 	apiBase = srv.URL
 	defer func() { apiBase = origBase }()
 
-	if _, err := vercelFetchExistingKeys(&http.Client{}, "bad-token", "test-project", ""); err == nil {
+	if _, err := vercelFetchEnvs(&http.Client{}, "bad-token", "test-project", ""); err == nil {
 		t.Fatal("HTTP 401 のときエラーを返すべき")
 	}
 }

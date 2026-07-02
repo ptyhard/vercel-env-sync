@@ -63,6 +63,19 @@ const (
 	MsgLabelUpdate MsgKey = "sync.label_update"
 	// MsgLabelNew は新規ラベル。
 	MsgLabelNew MsgKey = "sync.label_new"
+	// MsgLabelDelete は削除ラベル（prune）。
+	MsgLabelDelete MsgKey = "sync.label_delete"
+
+	// ----- Prune（定義に無い変数の削除） -----
+
+	// MsgPruneEntries は prune 削除対象件数の表示（書式: 件数）。
+	MsgPruneEntries MsgKey = "prune.entries"
+	// MsgPruneSkipWarn は既存一覧取得失敗により prune をスキップする警告（書式: エラー）。
+	MsgPruneSkipWarn MsgKey = "prune.skip_warn"
+	// MsgPruneConfirmNote は削除実行前の注意表示（書式: 件数）。
+	MsgPruneConfirmNote MsgKey = "prune.confirm_note"
+	// MsgPruneExcludeInvalid は prune_exclude の不正な glob パターンエラー（書式: パターン）。
+	MsgPruneExcludeInvalid MsgKey = "prune.exclude_invalid"
 	// MsgRequestCreateFail はリクエスト生成失敗の短いラベル（%w ラップ用）。
 	MsgRequestCreateFail MsgKey = "sync.request_create_fail"
 	// MsgSendFail は送信失敗の短いラベル（%w ラップ用）。

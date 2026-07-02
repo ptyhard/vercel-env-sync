@@ -382,6 +382,8 @@ variables:
 
 | フィールド | 型 | 説明 |
 |---|---|---|
+| `prune` | `bool`（トップレベル） | `true`: 同期時に `variables` に無いリモートの変数を削除（デフォルト `false`）。`--prune` フラグでも有効化可。詳細は[定義に無い変数の削除（prune）](#定義に無い変数の削除prune)を参照 |
+| `prune_exclude` | `[]string`（トップレベル） | prune で削除しないキー名の glob パターン一覧（例: `[BLOB_*, SENTRY_DSN]`）。大文字小文字は区別しない |
 | `secret` | `bool` | `true`（デフォルト）: シークレット登録 / `false`: 平文登録 |
 | `environments` | `[]string` | 登録先環境の配列。省略すると `defaults.environments` を継承 |
 | `provider` | `string` または `[]string` | 同期先プロバイダー。省略すると `defaults.provider` → CLI `--provider` フラグを使用 |
@@ -409,6 +411,29 @@ variables:
 
 > **注意**: GitHub の named environment は事前に作成が必要です。存在しない environment 名を指定するとエラーになります。
 
+### 定義に無い変数の削除（prune）
+
+`env-sync.yaml` のトップレベルに `prune: true` を書く（または `--prune` フラグを付ける）と、リモートに存在するが **`variables` に宣言されていない** 変数を同期時に削除します。
+
+```yaml
+prune: true
+prune_exclude:
+  - BLOB_*      # 例: Vercel Blob Store が発行するトークンを保持
+  - SENTRY_DSN
+
+variables:
+  DATABASE_URL: { secret: true }
+```
+
+安全のための動作:
+
+- 削除対象は送信前に一覧表示され、削除がある場合は必ず `y/N` 確認が入ります（`--yes` でスキップ、`--dry-run` は表示のみ）。
+- `variables` に宣言されたキーは、`.env` に値が無くても削除されません。
+- `prune_exclude` の glob パターンに一致するキーは保持されます（大文字小文字非区別）。
+- **Vercel**: システム変数と、インテグレーションが作成した変数（Blob Store・Marketplace 連携などで `configurationId` を持つもの）は自動で除外されます。
+- **GitHub**: Actions Secrets / Variables を、repo レベルと定義ファイルに現れる named environment のスコープで削除します。
+- **GCP**: `managed-by=env-sync` ラベル付き Secret のみ削除対象です。このラベルは env-sync が同期時に自動付与するため、env-sync 以外が作成した Secret には触れません。
+
 ## オプション / 環境変数
 
 | 項目 | 必須 | 説明 |
@@ -420,6 +445,7 @@ variables:
 | `--def <file>` | – | 定義 YAML（デフォルト `env-sync.yaml`） |
 | `--dry-run` | – | 送信せず新規/更新の区別を含む登録予定一覧を表示 |
 | `--yes` / `-y` | – | 更新(上書き)がある場合の確認をスキップ |
+| `--prune` | – | 定義ファイルに無いリモートの変数を削除（定義ファイルの `prune: true` でも有効化可） |
 | `--force` | – | `init` 時に既存の def ファイルを上書きする |
 | `VERCEL_TOKEN` | ◯(Vercel) | Vercel アクセストークン（dry-run 時は不要） |
 | `VERCEL_PROJECT_ID` | △(Vercel) | プロジェクト ID。未指定なら config ファイルまたは `.vercel/project.json` から自動取得 |
