@@ -82,8 +82,11 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	}
 	// ---- 各ターゲットに対して一覧表示と分類（dry-run も同様）----
 	// perTargetClassified はターゲット順に分類結果を保持し、確認・送信フェーズで再利用する。
+	// perTargetPrune はターゲット順に prune 削除対象を保持する（opts.Prune が false なら常に空）。
 	// tokenMissing はトークン未設定のターゲットインデックスを記録する（複数ターゲット時の失敗集約用）。
 	perTargetClassified := make([][]classifiedVercelItem, len(targets))
+	perTargetPrune := make([][]vercelEnv, len(targets))
+	pruneKeep := opts.PruneKeep()
 	tokenMissing := make([]bool, len(targets))
 	for i, tgt := range targets {
 		items := perTargetItems[i]
@@ -99,16 +102,23 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 			continue
 		}
 
-		// 既存 key を問い合わせて新規/更新を分類（結果を保存して後で再利用）
+		// 既存 envs を問い合わせて新規/更新を分類し、prune 対象を計算する（結果を保存して後で再利用）
 		var classified []classifiedVercelItem
 		if tgt.Token != "" {
-			existing, err := vercelFetchExistingKeys(client, tgt.Token, tgt.ProjectID, tgt.TeamID)
+			envs, err := vercelFetchEnvs(client, tgt.Token, tgt.ProjectID, tgt.TeamID)
 			if err == nil {
-				classified = classifyVercelItems(items, existing)
+				classified = classifyVercelItems(items, existingKeySet(envs))
+				if opts.Prune {
+					perTargetPrune[i] = computeVercelPrune(envs, pruneKeep)
+				}
 			} else {
 				// API 失敗時は classified = nil のまま（確認スキップしない安全側フォールバック）。
 				// 黙って分類をスキップすると新規/更新表示が出ない理由が分からないため警告を出す。
 				fmt.Fprint(os.Stderr, i18n.T(i18n.MsgVercelExistingKeysFetchWarn, err))
+				// 既存一覧が取れない場合は何を消してよいか判定できないため prune もスキップする。
+				if opts.Prune {
+					fmt.Fprint(os.Stderr, i18n.T(i18n.MsgPruneSkipWarn, err))
+				}
 			}
 		}
 		perTargetClassified[i] = classified
@@ -141,6 +151,14 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 				fmt.Printf("  %s (%s) environments=%s\n", it.Key, secretLabel, string(tj))
 			}
 		}
+		// prune 削除対象の一覧表示
+		if len(perTargetPrune[i]) > 0 {
+			fmt.Print(i18n.T(i18n.MsgPruneEntries, len(perTargetPrune[i])))
+			for _, e := range perTargetPrune[i] {
+				tj, _ := json.Marshal(e.Target)
+				fmt.Printf("  - %-30s environments=%s [%s]\n", e.Key, string(tj), i18n.T(i18n.MsgLabelDelete))
+			}
+		}
 		fmt.Println()
 	}
 
@@ -148,7 +166,11 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 	for _, items := range perTargetItems {
 		totalItems += len(items)
 	}
-	if totalItems == 0 {
+	totalPrune := 0
+	for _, p := range perTargetPrune {
+		totalPrune += len(p)
+	}
+	if totalItems == 0 && totalPrune == 0 {
 		fmt.Println(i18n.T(i18n.MsgNoEntries))
 		return nil
 	}
@@ -180,6 +202,11 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 				break
 			}
 		}
+	}
+	// 削除は破壊的操作のため、prune 対象がある場合は必ず確認する
+	if totalPrune > 0 {
+		needsConfirm = true
+		fmt.Print(i18n.T(i18n.MsgPruneConfirmNote, totalPrune))
 	}
 	if needsConfirm && !opts.Yes {
 		if !config.IsTTY(os.Stdin) {
@@ -218,6 +245,12 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		ok, ng := syncOneVercelTarget(client, tgt.Token, tgt.ProjectID, tgt.TeamID, perTargetItems[i])
 		totalOK += ok
 		totalNG += ng
+		// prune 削除（upsert 完了後に実行）
+		if len(perTargetPrune[i]) > 0 {
+			dok, dng := deleteVercelEnvs(client, tgt.Token, tgt.ProjectID, tgt.TeamID, perTargetPrune[i])
+			totalOK += dok
+			totalNG += dng
+		}
 	}
 
 	if activeCount > 1 {
@@ -336,8 +369,20 @@ type classifiedVercelItem struct {
 	isNew bool // true=新規, false=更新
 }
 
-// vercelFetchExistingKeys は Vercel プロジェクトに登録済みの key 名セットを返す。
-func vercelFetchExistingKeys(client *http.Client, token, projectID, teamID string) (map[string]bool, error) {
+// vercelEnv は Vercel に登録済みの環境変数 1 レコード分の情報（prune の削除に ID が必要）。
+type vercelEnv struct {
+	ID     string   `json:"id"`
+	Key    string   `json:"key"`
+	Type   string   `json:"type"`
+	Target []string `json:"target"`
+	// ConfigurationID が非空の変数はインテグレーション（Blob Store 等）が作成・管理している。
+	ConfigurationID string `json:"configurationId"`
+	// System が true の変数は Vercel が自動提供するシステム変数。
+	System bool `json:"system"`
+}
+
+// vercelFetchEnvs は Vercel プロジェクトに登録済みの環境変数一覧を返す。
+func vercelFetchEnvs(client *http.Client, token, projectID, teamID string) ([]vercelEnv, error) {
 	u, err := url.Parse(fmt.Sprintf("%s/v10/projects/%s/env", apiBase, projectID))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgVercelURLBuildFailInternal), err)
@@ -369,19 +414,86 @@ func vercelFetchExistingKeys(client *http.Client, token, projectID, teamID strin
 	}
 
 	var resp struct {
-		Envs []struct {
-			Key string `json:"key"`
-		} `json:"envs"`
+		Envs []vercelEnv `json:"envs"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
 		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgVercelExistingKeyParseFail), err)
 	}
+	return resp.Envs, nil
+}
 
-	existing := make(map[string]bool, len(resp.Envs))
-	for _, e := range resp.Envs {
+// existingKeySet は vercelFetchEnvs の結果から key 名セットを作る純粋関数。
+func existingKeySet(envs []vercelEnv) map[string]bool {
+	existing := make(map[string]bool, len(envs))
+	for _, e := range envs {
 		existing[e.Key] = true
 	}
-	return existing, nil
+	return existing
+}
+
+// computeVercelPrune は既存 envs のうち定義ファイルに無いレコードを削除対象として返す純粋関数。
+// 以下は env-sync の管理外とみなし削除対象から除外する:
+//   - システム変数（system=true または type=system）
+//   - インテグレーション（Blob Store・Marketplace 等）が作成した変数（configurationId が非空）
+//   - ID が空のレコード（削除 URL を組み立てられないため安全側に倒して除外）
+//
+// keep は Options.PruneKeep が返す保持判定（定義済みキー + prune_exclude パターン）。
+func computeVercelPrune(envs []vercelEnv, keep func(key string) bool) []vercelEnv {
+	var prune []vercelEnv
+	for _, e := range envs {
+		if e.ID == "" || e.System || e.Type == "system" || e.ConfigurationID != "" || keep(e.Key) {
+			continue
+		}
+		prune = append(prune, e)
+	}
+	return prune
+}
+
+// deleteVercelEnvs は prune 対象の環境変数レコードを 1 件ずつ削除し、成功数・失敗数を返す。
+// os.Exit は呼ばない。
+func deleteVercelEnvs(client *http.Client, token, projectID, teamID string, envs []vercelEnv) (ok, ng int) {
+	for _, e := range envs {
+		u, err := url.Parse(fmt.Sprintf("%s/v9/projects/%s/env/%s", apiBase, projectID, url.PathEscape(e.ID)))
+		if err != nil {
+			fmt.Print(i18n.T(i18n.MsgVercelURLBuildFailOut, err))
+			ng++
+			continue
+		}
+		q := u.Query()
+		if teamID != "" {
+			q.Set("teamId", teamID)
+		}
+		u.RawQuery = q.Encode()
+
+		req, err := http.NewRequest(http.MethodDelete, u.String(), nil)
+		if err != nil {
+			fmt.Print(i18n.T(i18n.MsgVercelRequestCreateFailOut, e.Key, err))
+			ng++
+			continue
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		res, err := client.Do(req)
+		if err != nil {
+			fmt.Print(i18n.T(i18n.MsgVercelSendFailOut, e.Key, err))
+			ng++
+			continue
+		}
+		if res.StatusCode >= 200 && res.StatusCode < 300 {
+			fmt.Printf("✓ %s [%s]\n", e.Key, i18n.T(i18n.MsgLabelDelete))
+			ok++
+			io.Copy(io.Discard, res.Body) //nolint:errcheck // drain で接続を再利用可能にする
+		} else {
+			msg := fmt.Sprintf("HTTP %d", res.StatusCode)
+			if detail := parseErrorBody(res.Body); detail != "" {
+				msg += ": " + detail
+			}
+			fmt.Printf("✗ %s -> %s\n", e.Key, msg)
+			ng++
+		}
+		res.Body.Close()
+	}
+	return ok, ng
 }
 
 // classifyVercelItems は items を既存 key セットと照合して新規/更新に分類する純粋関数。

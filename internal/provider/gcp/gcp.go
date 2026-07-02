@@ -10,6 +10,7 @@ import (
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
+	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -30,6 +31,9 @@ type secretManagerClient interface {
 	CreateSecret(ctx context.Context, req *secretmanagerpb.CreateSecretRequest) (*secretmanagerpb.Secret, error)
 	UpdateSecret(ctx context.Context, req *secretmanagerpb.UpdateSecretRequest) (*secretmanagerpb.Secret, error)
 	AddSecretVersion(ctx context.Context, req *secretmanagerpb.AddSecretVersionRequest) (*secretmanagerpb.SecretVersion, error)
+	// ListSecrets は req にマッチする Secret を全件返す（実装側でイテレータを消化する）。
+	ListSecrets(ctx context.Context, req *secretmanagerpb.ListSecretsRequest) ([]*secretmanagerpb.Secret, error)
+	DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteSecretRequest) error
 	Close() error
 }
 
@@ -52,6 +56,25 @@ func (r *realClient) UpdateSecret(ctx context.Context, req *secretmanagerpb.Upda
 
 func (r *realClient) AddSecretVersion(ctx context.Context, req *secretmanagerpb.AddSecretVersionRequest) (*secretmanagerpb.SecretVersion, error) {
 	return r.inner.AddSecretVersion(ctx, req)
+}
+
+func (r *realClient) ListSecrets(ctx context.Context, req *secretmanagerpb.ListSecretsRequest) ([]*secretmanagerpb.Secret, error) {
+	var secrets []*secretmanagerpb.Secret
+	it := r.inner.ListSecrets(ctx, req)
+	for {
+		s, err := it.Next()
+		if err == iterator.Done {
+			return secrets, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		secrets = append(secrets, s)
+	}
+}
+
+func (r *realClient) DeleteSecret(ctx context.Context, req *secretmanagerpb.DeleteSecretRequest) error {
+	return r.inner.DeleteSecret(ctx, req)
 }
 
 func (r *realClient) Close() error { return r.inner.Close() }
@@ -87,6 +110,39 @@ func (g *gcpProvider) Sync(opts provider.Options, entries []provider.Entry) erro
 		secretEntries = append(secretEntries, e)
 	}
 
+	// ---- prune 削除対象の収集（一覧表示の前に行う） ----
+	// prune は managed-by=env-sync ラベル付き Secret のみを対象にする（無関係な Secret の誤削除防止）。
+	ctx := context.Background()
+	var client secretManagerClient
+	defer func() {
+		if client != nil {
+			client.Close() //nolint:errcheck
+		}
+	}()
+	var pruneIDs []string
+	if opts.Prune {
+		c, err := newClientFunc(ctx)
+		if err != nil {
+			// dry-run は認証情報なしでも動く仕様のため、警告のうえ prune 表示のみスキップする
+			if !opts.DryRun {
+				return fmt.Errorf("%s", i18n.T(i18n.MsgGCPClientCreateFail, err))
+			}
+			fmt.Fprint(os.Stderr, i18n.T(i18n.MsgPruneSkipWarn, err))
+		} else {
+			client = c
+			secrets, err := client.ListSecrets(ctx, &secretmanagerpb.ListSecretsRequest{
+				Parent: "projects/" + projectID,
+				Filter: fmt.Sprintf("labels.%s=%s", managedByLabelKey, managedByLabelValue),
+			})
+			if err != nil {
+				// 一覧が取れない場合は何を消してよいか判定できないため削除をスキップする
+				fmt.Fprint(os.Stderr, i18n.T(i18n.MsgPruneSkipWarn, err))
+			} else {
+				pruneIDs = computeGCPPrune(secrets, opts.PruneKeep())
+			}
+		}
+	}
+
 	fmt.Print(i18n.T(i18n.MsgGCPTargetProject, projectID))
 	fmt.Print(i18n.T(i18n.MsgEntriesCount, len(secretEntries)))
 	for _, e := range secretEntries {
@@ -96,9 +152,16 @@ func (g *gcpProvider) Sync(opts provider.Options, entries []provider.Entry) erro
 		}
 		fmt.Printf("  %s  environments=[%s]\n", e.Key, envsStr)
 	}
+	// prune 削除対象の一覧表示
+	if len(pruneIDs) > 0 {
+		fmt.Print(i18n.T(i18n.MsgPruneEntries, len(pruneIDs)))
+		for _, id := range pruneIDs {
+			fmt.Printf("  - %s [%s]\n", id, i18n.T(i18n.MsgLabelDelete))
+		}
+	}
 	fmt.Println()
 
-	if len(secretEntries) == 0 {
+	if len(secretEntries) == 0 && len(pruneIDs) == 0 {
 		fmt.Println(i18n.T(i18n.MsgNoEntries))
 		return nil
 	}
@@ -109,6 +172,9 @@ func (g *gcpProvider) Sync(opts provider.Options, entries []provider.Entry) erro
 	}
 
 	// ---- 確認プロンプト ----
+	if len(pruneIDs) > 0 {
+		fmt.Print(i18n.T(i18n.MsgPruneConfirmNote, len(pruneIDs)))
+	}
 	if !opts.Yes {
 		if !config.IsTTY(os.Stdin) {
 			return fmt.Errorf("%s", i18n.T(i18n.MsgNonInteractiveErr))
@@ -123,12 +189,13 @@ func (g *gcpProvider) Sync(opts provider.Options, entries []provider.Entry) erro
 		}
 	}
 
-	ctx := context.Background()
-	client, err := newClientFunc(ctx)
-	if err != nil {
-		return fmt.Errorf("%s", i18n.T(i18n.MsgGCPClientCreateFail, err))
+	if client == nil {
+		c, err := newClientFunc(ctx)
+		if err != nil {
+			return fmt.Errorf("%s", i18n.T(i18n.MsgGCPClientCreateFail, err))
+		}
+		client = c
 	}
-	defer client.Close() //nolint:errcheck
 
 	ok, ng := 0, 0
 	for _, e := range secretEntries {
@@ -141,11 +208,39 @@ func (g *gcpProvider) Sync(opts provider.Options, entries []provider.Entry) erro
 		}
 	}
 
+	// ---- prune 削除（同期完了後に実行） ----
+	for _, id := range pruneIDs {
+		name := fmt.Sprintf("projects/%s/secrets/%s", projectID, id)
+		if err := client.DeleteSecret(ctx, &secretmanagerpb.DeleteSecretRequest{Name: name}); err != nil {
+			fmt.Printf("✗ %s -> %s\n", id, err)
+			ng++
+		} else {
+			fmt.Printf("✓ %s [%s]\n", id, i18n.T(i18n.MsgLabelDelete))
+			ok++
+		}
+	}
+
 	fmt.Print(i18n.T(i18n.MsgCompleted, ok, ng))
 	if ng > 0 {
 		os.Exit(1)
 	}
 	return nil
+}
+
+// computeGCPPrune は managed-by=env-sync ラベル付き Secret のうち保持対象でないものの
+// Secret ID を返す純粋関数。Secret.Name は "projects/<番号>/secrets/<ID>" 形式。
+// keep は Options.PruneKeep が返す保持判定（定義済みキー + prune_exclude パターン）。
+func computeGCPPrune(secrets []*secretmanagerpb.Secret, keep func(key string) bool) []string {
+	var ids []string
+	for _, s := range secrets {
+		name := s.GetName()
+		id := name[strings.LastIndex(name, "/")+1:]
+		if id == "" || keep(id) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // syncSecret は 1 件のエントリを Secret Manager に同期する。
@@ -158,7 +253,7 @@ func syncSecret(ctx context.Context, client secretManagerClient, projectID strin
 
 	labels := buildLabels(e.Environments)
 
-	_, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: secretName})
+	existing, err := client.GetSecret(ctx, &secretmanagerpb.GetSecretRequest{Name: secretName})
 	if err != nil {
 		st, ok := status.FromError(err)
 		if !ok || st.Code() != codes.NotFound {
@@ -183,16 +278,20 @@ func syncSecret(ctx context.Context, client secretManagerClient, projectID strin
 				return fmt.Errorf("%s", i18n.T(i18n.MsgGCPSecretCreateFail, createErr))
 			}
 		}
-	} else if len(labels) > 0 {
-		// 既存 secret の labels を更新する
-		if _, err = client.UpdateSecret(ctx, &secretmanagerpb.UpdateSecretRequest{
-			Secret: &secretmanagerpb.Secret{
-				Name:   secretName,
-				Labels: labels,
-			},
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
-		}); err != nil {
-			return fmt.Errorf("%s", i18n.T(i18n.MsgGCPSecretLabelUpdateFail, err))
+	} else {
+		// 既存 secret の labels に env-sync 管理ラベルをマージして更新する。
+		// 既存の無関係なラベルは保持し、差分が無ければ更新をスキップする。
+		merged := mergeLabels(existing.GetLabels(), labels)
+		if !labelsEqual(existing.GetLabels(), merged) {
+			if _, err = client.UpdateSecret(ctx, &secretmanagerpb.UpdateSecretRequest{
+				Secret: &secretmanagerpb.Secret{
+					Name:   secretName,
+					Labels: merged,
+				},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"labels"}},
+			}); err != nil {
+				return fmt.Errorf("%s", i18n.T(i18n.MsgGCPSecretLabelUpdateFail, err))
+			}
 		}
 	}
 
@@ -206,11 +305,45 @@ func syncSecret(ctx context.Context, client secretManagerClient, projectID strin
 	return nil
 }
 
+// managedByLabelKey / managedByLabelValue は env-sync が管理する Secret を示すラベル。
+// prune はこのラベルが付いた Secret のみを削除対象にする（無関係な Secret の誤削除防止）。
+const (
+	managedByLabelKey   = "managed-by"
+	managedByLabelValue = "env-sync"
+)
+
 // buildLabels は Entry.Environments から Secret Manager labels を組み立てる。
-// 複数 environment は "-" で連結して "environment" キーに格納する。
+// managed-by=env-sync を常に付与し、複数 environment は "-" で連結して "environment" キーに格納する。
 func buildLabels(environments []string) map[string]string {
-	if len(environments) == 0 {
-		return nil
+	labels := map[string]string{managedByLabelKey: managedByLabelValue}
+	if len(environments) > 0 {
+		labels["environment"] = strings.Join(environments, "-")
 	}
-	return map[string]string{"environment": strings.Join(environments, "-")}
+	return labels
+}
+
+// mergeLabels は既存ラベルに env-sync 管理ラベルを重ねた新しい map を返す純粋関数。
+// 既存の無関係なラベルは保持し、同名キーのみ上書きする。
+func mergeLabels(existing, managed map[string]string) map[string]string {
+	merged := make(map[string]string, len(existing)+len(managed))
+	for k, v := range existing {
+		merged[k] = v
+	}
+	for k, v := range managed {
+		merged[k] = v
+	}
+	return merged
+}
+
+// labelsEqual は 2 つのラベル map が等しいかを返す純粋関数。
+func labelsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }

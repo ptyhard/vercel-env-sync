@@ -98,6 +98,175 @@ func classifyGitHubTasks(client *http.Client, token, owner, repo string, tasks [
 	return classifyGitHubTasksByExistence(tasks, exists)
 }
 
+// githubPruneTarget は prune で削除する 1 件を表す。
+// secret が true なら Actions Secret、false なら Actions Variable。
+type githubPruneTarget struct {
+	envScope string // 空ならリポジトリレベル
+	name     string
+	secret   bool
+}
+
+// pruneScopes は prune でスキャンする envScope の一覧を返す純粋関数。
+// リポジトリレベル("")は常に含め、tasks に現れる named environment を重複なく加える。
+// 定義ファイルに現れない environment はスキャンしない（削除対象の探索範囲を管理対象に限定する）。
+func pruneScopes(tasks []githubTask) []string {
+	scopes := []string{""}
+	seen := map[string]bool{"": true}
+	for _, t := range tasks {
+		if !seen[t.envScope] {
+			seen[t.envScope] = true
+			scopes = append(scopes, t.envScope)
+		}
+	}
+	return scopes
+}
+
+// undefinedNames は names のうち保持対象でないもの（＝削除対象）を返す純粋関数。
+// keep は Options.PruneKeep が返す保持判定（定義済みキー + prune_exclude パターン、大文字小文字非区別）。
+func undefinedNames(names []string, keep func(key string) bool) []string {
+	var result []string
+	for _, n := range names {
+		if !keep(n) {
+			result = append(result, n)
+		}
+	}
+	return result
+}
+
+// collectGitHubPrune は各スコープの Secrets/Variables を列挙し、定義ファイルに無いものを削除対象として返す。
+func collectGitHubPrune(client *http.Client, token, owner, repo string, scopes []string, keep func(key string) bool) ([]githubPruneTarget, error) {
+	var result []githubPruneTarget
+	for _, scope := range scopes {
+		secretNames, err := githubListNames(client, token, owner, repo, scope, true)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range undefinedNames(secretNames, keep) {
+			result = append(result, githubPruneTarget{envScope: scope, name: n, secret: true})
+		}
+		varNames, err := githubListNames(client, token, owner, repo, scope, false)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range undefinedNames(varNames, keep) {
+			result = append(result, githubPruneTarget{envScope: scope, name: n, secret: false})
+		}
+	}
+	return result, nil
+}
+
+// githubListNames は Actions Secrets（secret=true）または Variables（secret=false）の名前一覧を返す。
+// per_page=100 でページングし全件を集める。
+func githubListNames(client *http.Client, token, owner, repo, envScope string, secret bool) ([]string, error) {
+	kind := "variables"
+	if secret {
+		kind = "secrets"
+	}
+	var base string
+	if envScope == "" {
+		base = fmt.Sprintf("%s/repos/%s/%s/actions/%s",
+			githubAPIBase, url.PathEscape(owner), url.PathEscape(repo), kind)
+	} else {
+		base = fmt.Sprintf("%s/repos/%s/%s/environments/%s/%s",
+			githubAPIBase, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(envScope), kind)
+	}
+
+	var names []string
+	const perPage = 100
+	for page := 1; ; page++ {
+		apiURL := fmt.Sprintf("%s?per_page=%d&page=%d", base, perPage, page)
+		req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestCreateFail), err)
+		}
+		setGitHubHeaders(req, token)
+
+		res, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestFail), err)
+		}
+
+		if res.StatusCode != http.StatusOK {
+			msg := fmt.Sprintf("HTTP %d", res.StatusCode)
+			if detail := parseGitHubErrorBody(res.Body); detail != "" {
+				msg += ": " + detail
+			}
+			res.Body.Close()
+			return nil, fmt.Errorf("%s", msg)
+		}
+
+		// secrets / variables どちらのレスポンスにも対応する共通デコード
+		var resp struct {
+			TotalCount int `json:"total_count"`
+			Secrets    []struct {
+				Name string `json:"name"`
+			} `json:"secrets"`
+			Variables []struct {
+				Name string `json:"name"`
+			} `json:"variables"`
+		}
+		err = json.NewDecoder(res.Body).Decode(&resp)
+		res.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestFail), err)
+		}
+
+		count := 0
+		for _, s := range resp.Secrets {
+			names = append(names, s.Name)
+			count++
+		}
+		for _, v := range resp.Variables {
+			names = append(names, v.Name)
+			count++
+		}
+		// total_count に達したら終了（件数が per_page の倍数のときの空ページ取得を避ける）。
+		// count < perPage は total_count が取得できない場合のフォールバック終了条件。
+		if count < perPage || (resp.TotalCount > 0 && len(names) >= resp.TotalCount) {
+			return names, nil
+		}
+	}
+}
+
+// githubDeletePruneTarget は prune 対象 1 件（Secret または Variable）を削除する。
+func githubDeletePruneTarget(client *http.Client, token, owner, repo string, t githubPruneTarget) error {
+	kind := "variables"
+	if t.secret {
+		kind = "secrets"
+	}
+	var apiURL string
+	if t.envScope == "" {
+		apiURL = fmt.Sprintf("%s/repos/%s/%s/actions/%s/%s",
+			githubAPIBase, url.PathEscape(owner), url.PathEscape(repo), kind, url.PathEscape(t.name))
+	} else {
+		apiURL = fmt.Sprintf("%s/repos/%s/%s/environments/%s/%s/%s",
+			githubAPIBase, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(t.envScope), kind, url.PathEscape(t.name))
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestCreateFail), err)
+	}
+	setGitHubHeaders(req, token)
+
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: %w", i18n.T(i18n.MsgSendFail), err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode == http.StatusNoContent {
+		io.Copy(io.Discard, res.Body) //nolint:errcheck // drain で接続を再利用可能にする
+		return nil
+	}
+
+	msg := fmt.Sprintf("HTTP %d", res.StatusCode)
+	if detail := parseGitHubErrorBody(res.Body); detail != "" {
+		msg += ": " + detail
+	}
+	return fmt.Errorf("%s", msg)
+}
+
 // countGitHubClassified は classified から新規件数・更新件数を返す。
 // classified が nil のときは新規=total、更新=0 を返す。
 func countGitHubClassified(classified []githubClassifiedTask, total int) (newCount, updateCount int) {
@@ -142,9 +311,11 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		owner, repo string
 		token       string
 		classified  []githubClassifiedTask
-		skipped     bool // トークン未設定により送信をスキップするターゲット
+		prune       []githubPruneTarget // prune 削除対象（opts.Prune が false なら常に空）
+		skipped     bool                // トークン未設定により送信をスキップするターゲット
 	}
 	resolved := make([]resolvedTarget, 0, len(targets))
+	pruneKeep := opts.PruneKeep()
 
 	// ---- 各ターゲットについて一覧表示と分類（dry-run も同様）----
 	for _, tgt := range targets {
@@ -167,6 +338,7 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 
 		// 既存確認して新規/更新を分類（結果を保存して後で再利用し、二重呼び出しを避ける）
 		var classified []githubClassifiedTask
+		var pruneTargets []githubPruneTarget
 		if targetToken != "" {
 			cls, err := classifyGitHubTasks(client, targetToken, ownerStr, repoStr, tasks)
 			if err == nil {
@@ -175,8 +347,17 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 				// API 失敗時は classified = nil のまま（安全側フォールバック）。
 				fmt.Fprint(os.Stderr, i18n.T(i18n.MsgGitHubExistingCheckWarn, err))
 			}
+			// prune 削除対象の収集（一覧取得に失敗した場合は削除をスキップする安全側フォールバック）
+			if opts.Prune {
+				pt, err := collectGitHubPrune(client, targetToken, ownerStr, repoStr, pruneScopes(tasks), pruneKeep)
+				if err == nil {
+					pruneTargets = pt
+				} else {
+					fmt.Fprint(os.Stderr, i18n.T(i18n.MsgPruneSkipWarn, err))
+				}
+			}
 		}
-		resolved = append(resolved, resolvedTarget{owner: ownerStr, repo: repoStr, token: targetToken, classified: classified})
+		resolved = append(resolved, resolvedTarget{owner: ownerStr, repo: repoStr, token: targetToken, classified: classified, prune: pruneTargets})
 
 		// 一覧表示
 		fmt.Print(i18n.T(i18n.MsgGitHubTargetRepo, ownerStr, repoStr))
@@ -205,10 +386,29 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 				fmt.Printf("  %s (env: %s, %s)\n", t.entry.Key, scope, kind)
 			}
 		}
+		// prune 削除対象の一覧表示
+		if len(pruneTargets) > 0 {
+			fmt.Print(i18n.T(i18n.MsgPruneEntries, len(pruneTargets)))
+			for _, pt := range pruneTargets {
+				kind := "Secret"
+				if !pt.secret {
+					kind = "Variable"
+				}
+				scope := pt.envScope
+				if scope == "" {
+					scope = "repo"
+				}
+				fmt.Printf("  - %s (env: %s, %s) [%s]\n", pt.name, scope, kind, i18n.T(i18n.MsgLabelDelete))
+			}
+		}
 		fmt.Println()
 	}
 
-	if len(tasks) == 0 {
+	totalPrune := 0
+	for _, r := range resolved {
+		totalPrune += len(r.prune)
+	}
+	if len(tasks) == 0 && totalPrune == 0 {
 		fmt.Println(i18n.T(i18n.MsgNoEntries))
 		return nil
 	}
@@ -239,6 +439,11 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 				break
 			}
 		}
+	}
+	// 削除は破壊的操作のため、prune 対象がある場合は必ず確認する
+	if totalPrune > 0 {
+		needsConfirm = true
+		fmt.Print(i18n.T(i18n.MsgPruneConfirmNote, totalPrune))
 	}
 	if needsConfirm && !opts.Yes {
 		if !config.IsTTY(os.Stdin) {
@@ -273,6 +478,20 @@ func (g *githubProvider) Sync(opts provider.Options, entries []provider.Entry) e
 		ok, ng := syncOneGitHubTarget(client, r.token, r.owner, r.repo, tasks, r.classified)
 		totalOK += ok
 		totalNG += ng
+		// prune 削除（upsert 完了後に実行）
+		for _, pt := range r.prune {
+			if err := githubDeletePruneTarget(client, r.token, r.owner, r.repo, pt); err != nil {
+				fmt.Printf("✗ %s -> %s\n", pt.name, err)
+				totalNG++
+			} else {
+				scope := pt.envScope
+				if scope == "" {
+					scope = "repo"
+				}
+				fmt.Printf("✓ %s (env: %s) [%s]\n", pt.name, scope, i18n.T(i18n.MsgLabelDelete))
+				totalOK++
+			}
+		}
 	}
 
 	if activeResolved > 1 {
