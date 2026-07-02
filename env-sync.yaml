@@ -14,6 +14,9 @@
 #
 #   environments: []  登録先環境の配列
 #           Vercel: production|preview|development（空なら production と preview）
+#                   または Custom Environment の slug（例: staging）
+#                   ※ Custom Environment は Vercel 側で事前作成が必要。存在しない slug はエラー。
+#                   ※ 標準環境と Custom Environment は混在指定可（例: [production, staging]）
 #           GitHub: named environment 名（空なら repo レベル）
 #           ※ GitHub の named environment は事前に作成が必要
 #

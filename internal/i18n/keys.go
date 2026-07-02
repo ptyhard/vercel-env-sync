@@ -204,8 +204,15 @@ const (
 	MsgVercelProjectNotDefined MsgKey = "vercel.project_not_defined"
 	// MsgVercelProjectInvalidConfig は vercel_project が config に存在しないエラー（書式: キー名, プロジェクト名, 定義済みリスト）。
 	MsgVercelProjectInvalidConfig MsgKey = "vercel.project_invalid_config"
-	// MsgVercelInvalidEnvironment は不正な environment 値エラー（書式: キー名, 値）。
-	MsgVercelInvalidEnvironment MsgKey = "vercel.invalid_environment"
+	// MsgVercelCustomEnvNotFound は指定した Custom Environment slug がプロジェクトに存在しないエラー
+	// （書式引数: slug, プロジェクトラベル, 利用可能 slug 一覧）。
+	MsgVercelCustomEnvNotFound MsgKey = "vercel.custom_env_not_found"
+	// MsgVercelCustomEnvFetchFail は Custom Environment 一覧取得失敗ラベル（%w ラップ用）。
+	MsgVercelCustomEnvFetchFail MsgKey = "vercel.custom_env_fetch_fail"
+	// MsgVercelCustomEnvParseFail は Custom Environment 一覧レスポンスのパース失敗ラベル（%w ラップ用）。
+	MsgVercelCustomEnvParseFail MsgKey = "vercel.custom_env_parse_fail"
+	// MsgVercelCustomEnvNoneAvailable はプロジェクトに Custom Environment が 1 件もない場合の「利用可能なし」ラベル。
+	MsgVercelCustomEnvNoneAvailable MsgKey = "vercel.custom_env_none_available"
 	// MsgVercelURLBuildFailInternal は vercelFetchExistingKeys の URL 組み立て失敗ラベル（%w ラップ用）。
 	MsgVercelURLBuildFailInternal MsgKey = "vercel.url_build_fail_internal"
 	// MsgVercelExistingKeyFetchFail は既存 key 取得失敗ラベル（%w ラップ用）。

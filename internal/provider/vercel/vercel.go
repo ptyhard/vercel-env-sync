@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -99,6 +100,14 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 			continue
 		}
 
+		// Custom Environment slug を ID に解決する（dry-run 時はスキップ）。
+		// custom slug が 1 件もないターゲットでは API を呼ばない。
+		if !opts.DryRun && tgt.Token != "" {
+			if err := applyCustomEnvironments(client, tgt, items); err != nil {
+				return err
+			}
+		}
+
 		// 既存 key を問い合わせて新規/更新を分類（結果を保存して後で再利用）
 		var classified []classifiedVercelItem
 		if tgt.Token != "" {
@@ -126,7 +135,9 @@ func (v *vercelProvider) Sync(opts provider.Options, entries []provider.Entry) e
 			fmt.Print(i18n.T(i18n.MsgVercelEntriesUpsert, len(items)))
 		}
 		for j, it := range items {
-			tj, _ := json.Marshal(it.Target)
+			// 一覧表示では標準環境（Target）と Custom Environment slug（customEnvSlugs）を結合して表示
+			allEnvs := append(append([]string{}, it.Target...), it.customEnvSlugs...)
+			tj, _ := json.Marshal(allEnvs)
 			secretLabel := "secret=true"
 			if it.Type == "plain" {
 				secretLabel = "secret=false"
@@ -384,6 +395,109 @@ func vercelFetchExistingKeys(client *http.Client, token, projectID, teamID strin
 	return existing, nil
 }
 
+// vercelFetchCustomEnvironments は GET /v9/projects/{id}/custom-environments で
+// slug → ID（"env_*" 形式）のマップを返す。
+func vercelFetchCustomEnvironments(client *http.Client, token, projectID, teamID string) (map[string]string, error) {
+	u, err := url.Parse(fmt.Sprintf("%s/v9/projects/%s/custom-environments", apiBase, url.PathEscape(projectID)))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgVercelURLBuildFailInternal), err)
+	}
+	q := u.Query()
+	if teamID != "" {
+		q.Set("teamId", teamID)
+	}
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgRequestCreateFail), err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgVercelCustomEnvFetchFail), err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		msg := fmt.Sprintf("HTTP %d", res.StatusCode)
+		if detail := parseErrorBody(res.Body); detail != "" {
+			msg += ": " + detail
+		}
+		return nil, fmt.Errorf("%s: %s", i18n.T(i18n.MsgVercelCustomEnvFetchFail), msg)
+	}
+
+	var resp struct {
+		Environments []struct {
+			ID   string `json:"id"`
+			Slug string `json:"slug"`
+		} `json:"environments"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
+		return nil, fmt.Errorf("%s: %w", i18n.T(i18n.MsgVercelCustomEnvParseFail), err)
+	}
+
+	m := make(map[string]string, len(resp.Environments))
+	for _, e := range resp.Environments {
+		m[e.Slug] = e.ID
+	}
+	return m, nil
+}
+
+// applyCustomEnvironments は items 内の customEnvSlugs を解決して CustomEnvironmentIDs を埋める。
+// custom slug が 1 件もないターゲットでは custom-environments API を一切呼ばない。
+func applyCustomEnvironments(client *http.Client, tgt config.VercelTarget, items []item) error {
+	// 必要な slug を集約する（重複排除）
+	slugSet := make(map[string]bool)
+	for _, it := range items {
+		for _, s := range it.customEnvSlugs {
+			slugSet[s] = true
+		}
+	}
+	if len(slugSet) == 0 {
+		return nil
+	}
+
+	customEnvs, err := vercelFetchCustomEnvironments(client, tgt.Token, tgt.ProjectID, tgt.TeamID)
+	if err != nil {
+		return err
+	}
+
+	// プロジェクトラベルは Name != "" ? Name : ProjectID
+	projectLabel := tgt.ProjectID
+	if tgt.Name != "" {
+		projectLabel = tgt.Name
+	}
+
+	for i := range items {
+		// 同一 item 内での CustomEnvironmentIDs 重複を防ぐ
+		addedIDs := make(map[string]bool)
+		for _, slug := range items[i].customEnvSlugs {
+			id, ok := customEnvs[slug]
+			if !ok {
+				available := make([]string, 0, len(customEnvs))
+				for s := range customEnvs {
+					available = append(available, s)
+				}
+				sort.Strings(available) // エラーメッセージを決定的にする
+				var availableStr string
+				if len(available) == 0 {
+					availableStr = i18n.T(i18n.MsgVercelCustomEnvNoneAvailable)
+				} else {
+					availableStr = strings.Join(available, ", ")
+				}
+				return fmt.Errorf("%s", i18n.T(i18n.MsgVercelCustomEnvNotFound, slug, projectLabel, availableStr))
+			}
+			if !addedIDs[id] {
+				addedIDs[id] = true
+				items[i].CustomEnvironmentIDs = append(items[i].CustomEnvironmentIDs, id)
+			}
+		}
+	}
+	return nil
+}
+
 // classifyVercelItems は items を既存 key セットと照合して新規/更新に分類する純粋関数。
 func classifyVercelItems(items []item, existingKeys map[string]bool) []classifiedVercelItem {
 	result := make([]classifiedVercelItem, len(items))
@@ -412,7 +526,8 @@ func countClassified(classified []classifiedVercelItem, total int) (newCount, up
 // entriesToVercelItems は Entry スライスを Vercel API 用の item スライスに変換する純粋関数。
 // Secret=true → type:"sensitive"、false → type:"plain"
 // Environments が空なら [production, preview] をデフォルト適用。
-// Environments の値が production/preview/development 以外なら error を返す。
+// production/preview/development は item.Target へ、それ以外は item.customEnvSlugs へ振り分ける。
+// Custom Environment slug の存在確認は applyCustomEnvironments が担うため、この関数はエラーを返さない。
 func entriesToVercelItems(entries []provider.Entry) ([]item, error) {
 	validTargets := map[string]bool{
 		"production":  true,
@@ -427,28 +542,40 @@ func entriesToVercelItems(entries []provider.Entry) ([]item, error) {
 			typ = "plain"
 		}
 
-		target := e.Environments
-		if len(target) == 0 {
-			target = []string{"production", "preview"}
+		envs := e.Environments
+		if len(envs) == 0 {
+			envs = []string{"production", "preview"}
 		}
 
-		for _, t := range target {
-			if !validTargets[t] {
-				return nil, fmt.Errorf("%s", i18n.T(i18n.MsgVercelInvalidEnvironment, e.Key, t))
+		var target []string
+		var customSlugs []string
+		for _, env := range envs {
+			if validTargets[env] {
+				target = append(target, env)
+			} else {
+				customSlugs = append(customSlugs, env)
 			}
 		}
 
-		items = append(items, item{Key: e.Key, Value: e.Value, Type: typ, Target: target})
+		items = append(items, item{
+			Key:            e.Key,
+			Value:          e.Value,
+			Type:           typ,
+			Target:         target,
+			customEnvSlugs: customSlugs,
+		})
 	}
 	return items, nil
 }
 
 // item は Vercel へ送信する 1 件の環境変数を表す。
 type item struct {
-	Key    string   `json:"key"`
-	Value  string   `json:"value"`
-	Type   string   `json:"type"`
-	Target []string `json:"target"`
+	Key                  string   `json:"key"`
+	Value                string   `json:"value"`
+	Type                 string   `json:"type"`
+	Target               []string `json:"target,omitempty"`
+	CustomEnvironmentIDs []string `json:"customEnvironmentIds,omitempty"`
+	customEnvSlugs       []string // 非公開: JSON化しない。表示・ID解決の中間保持用
 }
 
 // projectJSON は .vercel/project.json の必要フィールド。

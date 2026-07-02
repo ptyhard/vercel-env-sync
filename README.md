@@ -396,6 +396,8 @@ variables:
 
 `environments` accepts `production` / `preview` / `development`. Defaults to `production` and `preview` when omitted.
 
+`environments` also accepts custom environment slugs (e.g. `staging`). Custom environments must be pre-created in the Vercel project; a non-existent slug results in an error. Standard and custom values can be mixed (e.g. `[production, staging]`).
+
 #### Field Meanings for GitHub Actions
 
 | `secret` | Target | Description |

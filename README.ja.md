@@ -396,6 +396,8 @@ variables:
 
 `environments` には `production` / `preview` / `development` を指定。省略時（空）は `production` と `preview` をデフォルト適用。
 
+`environments` には Custom Environment の slug（例 `staging`）も指定可。Custom Environment は Vercel 側で事前作成が必要で、存在しない slug はエラー。標準環境と混在指定も可能（例 `[production, staging]`）。
+
 #### GitHub Actions における各フィールドの意味
 
 | `secret` | 登録先 | 説明 |
