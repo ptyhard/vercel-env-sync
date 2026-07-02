@@ -45,7 +45,13 @@ type VarConf struct {
 
 // Definition は定義 YAML 全体の構造。
 type Definition struct {
-	Defaults struct {
+	// Prune が true のとき、variables に定義されていないリモートの変数を削除する。
+	// CLI の --prune フラグでも有効化できる（どちらかが true なら prune 実行）。
+	Prune bool `yaml:"prune"`
+	// PruneExclude は prune で削除しないキー名の glob パターン一覧（例: [BLOB_*, SENTRY_DSN]）。
+	// 照合は大文字小文字を区別しない。
+	PruneExclude []string `yaml:"prune_exclude"`
+	Defaults     struct {
 		Secret        *bool        `yaml:"secret"`
 		Environments  []string     `yaml:"environments"`
 		Provider      *ProviderVal `yaml:"provider"`
@@ -105,6 +111,8 @@ func ParseFlags(argv []string, printUsageFn func(), versionFn func()) provider.O
 			opts.DryRun = true
 		case arg == "--yes" || arg == "-yes" || arg == "-y":
 			opts.Yes = true
+		case arg == "--prune" || arg == "-prune":
+			opts.Prune = true
 		case arg == "--provider" || arg == "-provider":
 			v := next()
 			if !provider.IsRegisteredProvider(v) {

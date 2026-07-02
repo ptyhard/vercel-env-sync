@@ -1,5 +1,10 @@
 package provider
 
+import (
+	"path"
+	"strings"
+)
+
 // Options はコマンドラインフラグの値を保持する。
 // cmd/env-sync から provider へ渡すための共通型。
 type Options struct {
@@ -7,10 +12,56 @@ type Options struct {
 	Def           string
 	DryRun        bool
 	Yes           bool
+	Prune         bool // 定義ファイルに無いリモートの変数を削除する（--prune または定義ファイル prune: true）
 	Provider      string
 	VercelProject string // --vercel-project で指定した場合のターゲット名（モノレポ対応）
 	GitHubRepo    string // --github-repo で指定した場合のターゲット名（モノレポ対応）
 	Language      string // --lang で指定した表示言語コード（"en" / "ja"）
+
+	// DefinedKeys は定義ファイル(variables)に宣言された全キー。
+	// prune の保持判定に使う（.env に値が無いキーも削除対象にはしない）。
+	DefinedKeys []string
+	// PruneExclude は prune で削除しないキー名の glob パターン一覧（定義ファイルの prune_exclude）。
+	PruneExclude []string
+}
+
+// PruneKeep は prune 時に key を保持すべきか（削除しないか）を判定する関数を返す。
+// 定義ファイルに宣言済みのキー、または PruneExclude のパターンに一致するキーは保持する。
+// 照合は大文字小文字を区別しない（GitHub が Secret/Variable 名を大文字で保持するため、
+// 表記ゆれで誤削除しない安全側に倒す）。
+func (o Options) PruneKeep() func(key string) bool {
+	defined := make(map[string]bool, len(o.DefinedKeys))
+	for _, k := range o.DefinedKeys {
+		defined[strings.ToUpper(k)] = true
+	}
+	patterns := make([]string, len(o.PruneExclude))
+	for i, p := range o.PruneExclude {
+		patterns[i] = strings.ToUpper(p)
+	}
+	return func(key string) bool {
+		upper := strings.ToUpper(key)
+		if defined[upper] {
+			return true
+		}
+		for _, p := range patterns {
+			// パターンは main で検証済みのため path.Match のエラーは無視できる
+			if ok, _ := path.Match(p, upper); ok {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// ValidatePrunePatterns は prune_exclude の glob パターンを検証し、不正なパターンを返す。
+// すべて正しい場合は "" を返す。
+func ValidatePrunePatterns(patterns []string) (invalid string, ok bool) {
+	for _, p := range patterns {
+		if _, err := path.Match(p, ""); err != nil {
+			return p, false
+		}
+	}
+	return "", true
 }
 
 // Entry は provider 非依存の共通ドメインモデル。

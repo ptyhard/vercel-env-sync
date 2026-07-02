@@ -36,6 +36,7 @@ Options (sync):
   --def <file>              definition YAML (default: env-sync.yaml)
   --dry-run                 show planned entries (new/update) without sending (values not shown)
   --yes, -y                 skip confirmation when updates are included
+  --prune                   delete remote variables not in the definition file (also enabled by prune: true in the definition file)
   --vercel-project <name>   sync only the named project from config vercel.projects (monorepo)
   --github-repo <name>      sync only the named repo from config github.repos (monorepo)
   --lang <code>             display language (en / ja, default: en)
@@ -111,6 +112,9 @@ Config file (alternative to environment variables):
   * If the global config contains tokens and the file permission is not 0600, a warning is shown.
 
 YAML schema (definition file env-sync.yaml):
+  prune: true|false   whether to delete remote variables not in variables (default: false)
+                      Vercel: env vars / GitHub: Actions Secrets & Variables /
+                      GCP: only Secrets labeled managed-by=env-sync
   secret: true|false  whether to register as a secret (default: true)
                       Vercel: true→sensitive / false→plain
                       GitHub: true→Secret / false→Variable
@@ -132,9 +136,16 @@ YAML schema (definition file env-sync.yaml):
 	MsgEntriesCount:      "%d entries:\n",
 	MsgLabelUpdate:       "update",
 	MsgLabelNew:          "new",
-	MsgRequestCreateFail: "failed to create request",
-	MsgSendFail:          "failed to send",
-	MsgRequestFail:       "request failed",
+	MsgLabelDelete:       "delete",
+
+	// ----- Prune -----
+	MsgPruneEntries:        "prune targets (not in the definition file): %d entries:\n",
+	MsgPruneSkipWarn:       "⚠ prune: failed to fetch existing entries, skipping deletion: %s\n",
+	MsgPruneConfirmNote:    "⚠ prune: %d undefined entries will be DELETED\n",
+	MsgPruneExcludeInvalid: "prune_exclude: invalid glob pattern %q",
+	MsgRequestCreateFail:   "failed to create request",
+	MsgSendFail:            "failed to send",
+	MsgRequestFail:         "request failed",
 
 	// ----- Config: ProviderVal -----
 	MsgProviderStringOrArray: "provider must be a string or array of strings",

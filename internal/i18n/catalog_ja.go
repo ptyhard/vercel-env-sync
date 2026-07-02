@@ -36,6 +36,7 @@ var jaCatalog = map[MsgKey]string{
   --def <file>              定義 YAML（デフォルト env-sync.yaml）
   --dry-run                 送信せず新規/更新の区別を含む登録予定一覧を表示（値は出さない）
   --yes, -y                 更新(上書き)を含む場合の確認をスキップして送信
+  --prune                   定義ファイルに無いリモートの変数を削除する（定義ファイルの prune: true でも有効化可）
   --vercel-project <name>   config の vercel.projects から指定名のプロジェクトのみ同期（モノレポ対応）
   --github-repo <name>      config の github.repos から指定名のリポジトリのみ同期（モノレポ対応）
   --lang <code>             表示言語（en / ja、デフォルト en）
@@ -111,6 +112,9 @@ config ファイル（環境変数の代替）:
   ※ global config にトークンが含まれていてパーミッションが 0600 でない場合は警告を出力します
 
 YAML スキーマ（定義ファイル env-sync.yaml）:
+  prune: true|false   variables に無いリモートの変数を削除するか（デフォルト false）
+                      Vercel: 環境変数 / GitHub: Actions Secrets・Variables /
+                      GCP: managed-by=env-sync ラベル付き Secret のみ対象
   secret: true|false  シークレットとして登録するか（デフォルト true）
                       Vercel: true→sensitive / false→plain
                       GitHub: true→Secret / false→Variable
@@ -132,9 +136,16 @@ YAML スキーマ（定義ファイル env-sync.yaml）:
 	MsgEntriesCount:      "登録対象 %d 件:\n",
 	MsgLabelUpdate:       "更新",
 	MsgLabelNew:          "新規",
-	MsgRequestCreateFail: "リクエスト生成失敗",
-	MsgSendFail:          "送信失敗",
-	MsgRequestFail:       "リクエスト失敗",
+	MsgLabelDelete:       "削除",
+
+	// ----- Prune -----
+	MsgPruneEntries:        "削除対象 (定義ファイルに無い変数) %d 件:\n",
+	MsgPruneSkipWarn:       "⚠ prune: 既存一覧の取得に失敗したため削除をスキップします: %s\n",
+	MsgPruneConfirmNote:    "⚠ prune: 定義に無い %d 件を削除します\n",
+	MsgPruneExcludeInvalid: "prune_exclude: 不正な glob パターン %q",
+	MsgRequestCreateFail:   "リクエスト生成失敗",
+	MsgSendFail:            "送信失敗",
+	MsgRequestFail:         "リクエスト失敗",
 
 	// ----- Config: ProviderVal -----
 	MsgProviderStringOrArray: "provider は文字列または文字列の配列で指定してください",
