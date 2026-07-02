@@ -166,16 +166,44 @@ func TestEntriesToVercelItems_EmptyEnvironments_DefaultTarget(t *testing.T) {
 	}
 }
 
-func TestEntriesToVercelItems_InvalidEnvironment_Error(t *testing.T) {
+func TestEntriesToVercelItems_CustomSlug_GoesToCustomEnvSlugs(t *testing.T) {
+	// staging は validTargets に含まれないため customEnvSlugs に振り分けられ、Target には含まれない。
+	// entriesToVercelItems 自体はエラーを返さない（slug の存在確認は applyCustomEnvironments が担う）。
 	entries := []provider.Entry{
 		{Key: "FOO", Value: "bar", Secret: true, Environments: []string{"staging"}},
 	}
-	_, err := entriesToVercelItems(entries)
-	if err == nil {
-		t.Fatal("不正な environments でエラーを期待したが nil")
+	items, err := entriesToVercelItems(entries)
+	if err != nil {
+		t.Fatalf("entriesToVercelItems エラーなしを期待したが: %v", err)
 	}
-	if !strings.Contains(err.Error(), "staging") {
-		t.Errorf("エラーメッセージに staging が含まれていない: %v", err)
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	if len(items[0].Target) != 0 {
+		t.Errorf("staging は Target に含まれてはいけない: %v", items[0].Target)
+	}
+	if len(items[0].customEnvSlugs) != 1 || items[0].customEnvSlugs[0] != "staging" {
+		t.Errorf("customEnvSlugs = %v, want [staging]", items[0].customEnvSlugs)
+	}
+}
+
+func TestEntriesToVercelItems_MixedStandardAndCustom(t *testing.T) {
+	// production（標準）と staging（カスタム）の混在指定。
+	entries := []provider.Entry{
+		{Key: "FOO", Value: "bar", Secret: true, Environments: []string{"production", "staging"}},
+	}
+	items, err := entriesToVercelItems(entries)
+	if err != nil {
+		t.Fatalf("entriesToVercelItems エラーなしを期待したが: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	if len(items[0].Target) != 1 || items[0].Target[0] != "production" {
+		t.Errorf("Target = %v, want [production]", items[0].Target)
+	}
+	if len(items[0].customEnvSlugs) != 1 || items[0].customEnvSlugs[0] != "staging" {
+		t.Errorf("customEnvSlugs = %v, want [staging]", items[0].customEnvSlugs)
 	}
 }
 
@@ -386,6 +414,271 @@ func newVercelTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Serve
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// --- vercelFetchCustomEnvironments のテスト ---
+
+func TestVercelFetchCustomEnvironments_Success(t *testing.T) {
+	var gotPath, gotQuery, gotMethod, gotAuth string
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		gotAuth = r.Header.Get("Authorization")
+		resp := map[string]interface{}{
+			"environments": []map[string]interface{}{
+				{"id": "env_staging", "slug": "staging", "type": "custom"},
+				{"id": "env_qa", "slug": "qa", "type": "custom"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	m, err := vercelFetchCustomEnvironments(&http.Client{}, "test-token", "my-project", "my-team")
+	if err != nil {
+		t.Fatalf("vercelFetchCustomEnvironments 失敗: %v", err)
+	}
+
+	if gotMethod != http.MethodGet {
+		t.Errorf("メソッド = %q, want GET", gotMethod)
+	}
+	if want := "/v9/projects/my-project/custom-environments"; gotPath != want {
+		t.Errorf("パス = %q, want %q", gotPath, want)
+	}
+	if !strings.Contains(gotQuery, "teamId=my-team") {
+		t.Errorf("クエリ = %q, want teamId=my-team を含む", gotQuery)
+	}
+	if want := "Bearer test-token"; gotAuth != want {
+		t.Errorf("Authorization = %q, want %q", gotAuth, want)
+	}
+	if m["staging"] != "env_staging" {
+		t.Errorf("m[staging] = %q, want env_staging", m["staging"])
+	}
+	if m["qa"] != "env_qa" {
+		t.Errorf("m[qa] = %q, want env_qa", m["qa"])
+	}
+}
+
+func TestVercelFetchCustomEnvironments_HTTPError(t *testing.T) {
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":{"message":"project not found"}}`)) //nolint:errcheck
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	_, err := vercelFetchCustomEnvironments(&http.Client{}, "token", "bad-project", "")
+	if err == nil {
+		t.Fatal("HTTP 404 のときエラーを期待したが nil")
+	}
+}
+
+func TestVercelFetchCustomEnvironments_ParseFail(t *testing.T) {
+	// レスポンスが不正 JSON のとき MsgVercelCustomEnvParseFail 経路でエラーを返す。
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("not valid json")) //nolint:errcheck
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	_, err := vercelFetchCustomEnvironments(&http.Client{}, "token", "project", "")
+	if err == nil {
+		t.Fatal("不正 JSON のときエラーを期待したが nil")
+	}
+}
+
+func TestVercelFetchCustomEnvironments_NoTeamID(t *testing.T) {
+	var gotQuery string
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"environments": []interface{}{}}) //nolint:errcheck
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	if _, err := vercelFetchCustomEnvironments(&http.Client{}, "token", "project", ""); err != nil {
+		t.Fatalf("vercelFetchCustomEnvironments 失敗: %v", err)
+	}
+	if gotQuery != "" {
+		t.Errorf("teamID 空のときクエリは空のはず, got %q", gotQuery)
+	}
+}
+
+// --- applyCustomEnvironments のテスト ---
+
+func TestApplyCustomEnvironments_NoCustomSlugs_NoAPICall(t *testing.T) {
+	// custom slug が 1 件もない場合、custom-environments API は呼ばれない。
+	apiCalled := false
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "custom-environments") {
+			apiCalled = true
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	items := []item{
+		{Key: "FOO", Target: []string{"production"}, customEnvSlugs: nil},
+	}
+	tgt := config.VercelTarget{Token: "tok", ProjectID: "pid"}
+	if err := applyCustomEnvironments(&http.Client{}, tgt, items); err != nil {
+		t.Fatalf("applyCustomEnvironments エラー: %v", err)
+	}
+	if apiCalled {
+		t.Error("custom slug がないのに custom-environments API が呼ばれた")
+	}
+}
+
+func TestApplyCustomEnvironments_SlugNotFound_Error(t *testing.T) {
+	// 存在しない slug を指定したとき、slug 名を含むエラーが返る。
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"environments": []map[string]interface{}{
+				{"id": "env_qa", "slug": "qa"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	items := []item{
+		{Key: "FOO", customEnvSlugs: []string{"nonexistent"}},
+	}
+	tgt := config.VercelTarget{Token: "tok", ProjectID: "pid"}
+	err := applyCustomEnvironments(&http.Client{}, tgt, items)
+	if err == nil {
+		t.Fatal("存在しない slug でエラーを期待したが nil")
+	}
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("エラーメッセージに slug 名 'nonexistent' が含まれていない: %v", err)
+	}
+}
+
+func TestApplyCustomEnvironments_SlugNotFound_AvailableSorted(t *testing.T) {
+	// エラーメッセージ内の利用可能 slug 一覧がソートされていること（決定的な出力）。
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"environments": []map[string]interface{}{
+				{"id": "env_z", "slug": "zzz"},
+				{"id": "env_a", "slug": "aaa"},
+				{"id": "env_m", "slug": "mmm"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	items := []item{{Key: "FOO", customEnvSlugs: []string{"nonexistent"}}}
+	tgt := config.VercelTarget{Token: "tok", ProjectID: "pid"}
+	err := applyCustomEnvironments(&http.Client{}, tgt, items)
+	if err == nil {
+		t.Fatal("エラーを期待したが nil")
+	}
+	msg := err.Error()
+	// "aaa" が "mmm" より前、"mmm" が "zzz" より前に現れることを確認
+	idxA := strings.Index(msg, "aaa")
+	idxM := strings.Index(msg, "mmm")
+	idxZ := strings.Index(msg, "zzz")
+	if idxA < 0 || idxM < 0 || idxZ < 0 {
+		t.Fatalf("エラーメッセージに slug 名が含まれない: %v", msg)
+	}
+	if !(idxA < idxM && idxM < idxZ) {
+		t.Errorf("available 一覧がソートされていない: %v", msg)
+	}
+}
+
+func TestApplyCustomEnvironments_DuplicateSlug_NoDuplicateID(t *testing.T) {
+	// 同一 slug を複数指定した場合でも CustomEnvironmentIDs に重複 ID が入らない。
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"environments": []map[string]interface{}{
+				{"id": "env_stg", "slug": "staging"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	items := []item{
+		{Key: "FOO", customEnvSlugs: []string{"staging", "staging"}},
+	}
+	tgt := config.VercelTarget{Token: "tok", ProjectID: "pid"}
+	if err := applyCustomEnvironments(&http.Client{}, tgt, items); err != nil {
+		t.Fatalf("applyCustomEnvironments エラー: %v", err)
+	}
+	if len(items[0].CustomEnvironmentIDs) != 1 {
+		t.Errorf("重複排除後の CustomEnvironmentIDs len = %d, want 1: %v", len(items[0].CustomEnvironmentIDs), items[0].CustomEnvironmentIDs)
+	}
+}
+
+func TestApplyCustomEnvironments_NoAvailable_Message(t *testing.T) {
+	// プロジェクトに Custom Environment が 1 件も無い場合のエラーメッセージに「なし」ラベルが含まれる。
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"environments": []map[string]interface{}{}, // 0 件
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	items := []item{{Key: "FOO", customEnvSlugs: []string{"staging"}}}
+	tgt := config.VercelTarget{Token: "tok", ProjectID: "pid"}
+	err := applyCustomEnvironments(&http.Client{}, tgt, items)
+	if err == nil {
+		t.Fatal("エラーを期待したが nil")
+	}
+	// available が空のとき末尾が空文字列にならず「なし」ラベルが入る
+	if strings.Contains(err.Error(), "available: )") {
+		t.Errorf("available 空のとき末尾が空になっている: %v", err)
+	}
+}
+
+func TestApplyCustomEnvironments_Mixed_JSONBody(t *testing.T) {
+	// [production, staging] 混在時の POST ボディが target と customEnvironmentIds を含む。
+	srv := newVercelTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "custom-environments") {
+			resp := map[string]interface{}{
+				"environments": []map[string]interface{}{
+					{"id": "env_stg123", "slug": "staging"},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	})
+	withVercelAPIBase(t, srv.URL)
+
+	items := []item{
+		{Key: "FOO", Value: "bar", Type: "sensitive", Target: []string{"production"}, customEnvSlugs: []string{"staging"}},
+	}
+	tgt := config.VercelTarget{Token: "tok", ProjectID: "pid"}
+	if err := applyCustomEnvironments(&http.Client{}, tgt, items); err != nil {
+		t.Fatalf("applyCustomEnvironments エラー: %v", err)
+	}
+
+	// applyCustomEnvironments 後に CustomEnvironmentIDs が埋まっていること
+	if len(items[0].CustomEnvironmentIDs) != 1 || items[0].CustomEnvironmentIDs[0] != "env_stg123" {
+		t.Errorf("CustomEnvironmentIDs = %v, want [env_stg123]", items[0].CustomEnvironmentIDs)
+	}
+
+	// JSON に target と customEnvironmentIds が共存する
+	body, _ := json.Marshal(items[0])
+	var m map[string]interface{}
+	json.Unmarshal(body, &m) //nolint:errcheck
+
+	if targets, ok := m["target"].([]interface{}); !ok || len(targets) == 0 {
+		t.Errorf("JSON に target フィールドがない: %s", string(body))
+	}
+	if ids, ok := m["customEnvironmentIds"].([]interface{}); !ok || len(ids) == 0 {
+		t.Errorf("JSON に customEnvironmentIds フィールドがない: %s", string(body))
+	}
 }
 
 // classifyVercelItems のテスト（分類結果の再利用確認のため）
